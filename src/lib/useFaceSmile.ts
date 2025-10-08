@@ -78,7 +78,8 @@ export function useFaceSmile() {
     const pCenter = face[LM_LOWER_LIP_UPPER_CENTER];
     if (!pLeft || !pRight || !pCenter) return null;
 
-    const toPix = (p: any): Point => ({ x: p.x * W, y: p.y * H });
+    type Landmark2D = { x: number; y: number };
+    const toPix = (p: Landmark2D): Point => ({ x: p.x * W, y: p.y * H });
     const leftCorner = { x: pLeft.x, y: pLeft.y };
     const rightCorner = { x: pRight.x, y: pRight.y };
     const lowerLipUpperCenter = { x: pCenter.x, y: pCenter.y };

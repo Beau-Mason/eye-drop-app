@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { db } from "@/lib/db";
 import { v4 as uuid } from "uuid";
@@ -416,10 +417,13 @@ export default function RecordPage() {
 
         {/* 撮影画像 */}
         {snapUrl && (
-          <img
+          <Image
             src={snapUrl}
             alt="撮影結果"
-            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-200 ${
+            fill
+            sizes="(max-width: 640px) 100vw, 640px"
+            unoptimized
+            className={`object-cover transition-opacity duration-200 ${
               showImage ? "opacity-100" : "opacity-0"
             }`}
           />
