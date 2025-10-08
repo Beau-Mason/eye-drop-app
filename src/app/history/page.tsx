@@ -1,34 +1,85 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { db, type Snap } from "@/lib/db";
 import { useRouter } from "next/navigation";
 
 export default function HistoryPage() {
   const router = useRouter();
   const [items, setItems] = useState<Array<{ snap: Snap; url: string }>>([]);
+  // 生成した blob: URL を追跡して確実に解放（Safari 安定化）
+  const createdUrlsRef = useRef<string[]>([]);
+
+  const ensureJpegBlob = (b: Blob): Blob => {
+    if (b.type && b.type.startsWith("image/")) return b;
+    return new Blob([b], { type: "image/jpeg" });
+  };
+
+  const blobToDataUrl = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(fr.error);
+      fr.readAsDataURL(blob);
+    });
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       const snaps = await db.snaps.orderBy("takenAt").reverse().toArray();
       if (!mounted) return;
-      const withUrl = snaps.map((s) => ({
-        snap: s,
-        url: URL.createObjectURL(s.blob),
-      }));
+      const withUrl = snaps.map((s) => {
+        const typed = ensureJpegBlob(s.blob);
+        const url = URL.createObjectURL(typed);
+        createdUrlsRef.current.push(url);
+        return { snap: s, url };
+      });
       setItems(withUrl);
     })();
     return () => {
       mounted = false;
-      // 生成した URL を解放
-      items.forEach((i) => URL.revokeObjectURL(i.url));
+      // 生成した blob: URL を確実に解放
+      for (const u of createdUrlsRef.current) {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {}
+      }
+      createdUrlsRef.current = [];
     };
   }, []);
 
   const remove = async (id: string) => {
     await db.snaps.delete(id);
-    setItems((prev) => prev.filter((i) => i.snap.id !== id));
+    setItems((prev) => {
+      const target = prev.find((i) => i.snap.id === id);
+      if (target && target.url.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(target.url);
+        } catch {}
+      }
+      return prev.filter((i) => i.snap.id !== id);
+    });
+  };
+
+  // Safari で blob: URL の表示に失敗した場合のフォールバック
+  const handleImageError = async (id: string) => {
+    try {
+      const snap = await db.snaps.get(id);
+      if (!snap) return;
+      const typed = ensureJpegBlob(snap.blob);
+      const dataUrl = await blobToDataUrl(typed);
+      setItems((prev) =>
+        prev.map((i) => {
+          if (i.snap.id !== id) return i;
+          if (i.url.startsWith("blob:")) {
+            try {
+              URL.revokeObjectURL(i.url);
+            } catch {}
+          }
+          return { ...i, url: dataUrl };
+        })
+      );
+    } catch {}
   };
 
   return (
@@ -51,6 +102,7 @@ export default function HistoryPage() {
               src={url}
               alt="記録写真"
               className="w-full aspect-video object-cover"
+              onError={() => handleImageError(snap.id)}
             />
             <div className="p-2 text-xs opacity-70">
               {new Date(snap.takenAt).toLocaleString()}（

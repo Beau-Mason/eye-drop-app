@@ -146,18 +146,57 @@ export default function RecordPage() {
       const now = performance.now();
       const res = lm.detectForVideo(v, now);
       const bs = res?.faceBlendshapes?.[0]?.categories;
-      const L =
-        bs?.find((c) => c.categoryName === "mouthSmileLeft")?.score ?? 0;
-      const R =
-        bs?.find((c) => c.categoryName === "mouthSmileRight")?.score ?? 0;
+      // ---- 新スコア計算 ----
+      // 口: 左右口角と下唇の中心から角度を計算し s_mouth = α - β * θ
+      const face = res?.faceLandmarks?.[0];
+      const MOUTH_LEFT_IDX = 61; // 左口角
+      const MOUTH_RIGHT_IDX = 291; // 右口角
+      const MOUTH_BOTTOM_CENTER_IDX = 14; // 下唇の内側・下中心（近似）
+
+      let s_mouth = 0;
+      if (face) {
+        const PL = face[MOUTH_LEFT_IDX];
+        const PR = face[MOUTH_RIGHT_IDX];
+        const PB = face[MOUTH_BOTTOM_CENTER_IDX];
+        if (PL && PR && PB) {
+          const vLx = PL.x - PB.x;
+          const vLy = PL.y - PB.y;
+          const vRx = PR.x - PB.x;
+          const vRy = PR.y - PB.y;
+          const dot = vLx * vRx + vLy * vRy;
+          const magL = Math.hypot(vLx, vLy);
+          const magR = Math.hypot(vRx, vRy);
+          if (magL > 1e-6 && magR > 1e-6) {
+            let cosTheta = dot / (magL * magR);
+            // 数値誤差ガード
+            cosTheta = Math.max(-1, Math.min(1, cosTheta));
+            const thetaDeg = (Math.acos(cosTheta) * 180) / Math.PI; // 度
+            const ALPHA = 1.8;
+            const BETA = 0.01;
+            s_mouth = ALPHA - BETA * thetaDeg;
+          }
+        }
+      }
+
+      // 目: ブレンドシェイプの eyeBlink を用いて開眼確率を近似
+      const blinkL =
+        bs?.find((c) => c.categoryName === "eyeBlinkLeft")?.score ?? 0;
+      const blinkR =
+        bs?.find((c) => c.categoryName === "eyeBlinkRight")?.score ?? 0;
+      // 開眼確率を 1 - blink として近似し、[0,1]へクリップ
+      const P_open_L = Math.max(0, Math.min(1, 1 - blinkL));
+      const P_open_R = Math.max(0, Math.min(1, 1 - blinkR));
+      const s_eye = 1 - P_open_L * P_open_R; // 指定式
+
+      // 最終スコア: S = clamp(s_mouth + s_eye, 0, 1)
+      const S = Math.max(0, Math.min(1, s_mouth + s_eye));
 
       // 簡易スムージング（1フレームぶれ対策）
-      const score = Math.max(0, Math.min(1, (L + R) / 2));
-      setSmileScore((prev) => prev * 0.6 + score * 0.4);
+      setSmileScore((prev) => prev * 0.6 + S * 0.4);
 
       // 段階（tier）更新＆メッセージ
       const nextTier: 0 | 1 | 2 | 3 =
-        score >= TIER3 ? 3 : score >= TIER2 ? 2 : score >= TIER1 ? 1 : 0;
+        S >= TIER3 ? 3 : S >= TIER2 ? 2 : S >= TIER1 ? 1 : 0;
 
       // setInterval のクロージャで state が古くなるのを避けるため、
       // カウントダウン中かどうかは armTimerRef の有無で判定する
@@ -393,6 +432,15 @@ export default function RecordPage() {
               className={`rounded-full px-3 py-1 text-xs font-semibold bg-white/90 backdrop-blur shadow animate-pop`}
             >
               {badgeText}
+            </div>
+          </div>
+        )}
+
+        {/* 笑顔スコアのリアルタイム表示 */}
+        {!showImage && (
+          <div className="pointer-events-none absolute top-0 right-0 p-3">
+            <div className="rounded-full px-3 py-1 text-xs font-semibold bg-white/90 backdrop-blur shadow">
+              S: {smileScore.toFixed(2)}
             </div>
           </div>
         )}
