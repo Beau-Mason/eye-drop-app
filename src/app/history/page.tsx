@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { db, type Snap } from "@/lib/db";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 
 export default function HistoryPage() {
   const router = useRouter();
@@ -98,12 +99,17 @@ export default function HistoryPage() {
       <ul className="grid grid-cols-2 gap-3">
         {items.map(({ snap, url }) => (
           <li key={snap.id} className="rounded-xl overflow-hidden border">
-            <img
-              src={url}
-              alt="記録写真"
-              className="w-full aspect-video object-cover"
-              onError={() => handleImageError(snap.id)}
-            />
+            <div className="relative w-full aspect-video">
+              <Image
+                src={url}
+                alt="記録写真"
+                fill
+                sizes="(max-width: 768px) 50vw, 33vw"
+                unoptimized
+                className="object-cover"
+                onError={() => handleImageError(snap.id)}
+              />
+            </div>
             <div className="p-2 text-xs opacity-70">
               {new Date(snap.takenAt).toLocaleString()}（
               {snap.eye === "both" ? "両" : snap.eye === "left" ? "左" : "右"}）
