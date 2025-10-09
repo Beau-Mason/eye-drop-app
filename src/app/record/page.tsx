@@ -16,8 +16,8 @@ const TIER1 = 0.4;
 const TIER2 = 0.6;
 const TIER3 = 0.8;
 
-// 撮影前の短いアーム（カウントダウン）秒数
-const ARM_SECONDS = 3;
+// 記録ウィンドウ（カウントダウン）秒数
+const ARM_SECONDS = 10;
 
 export default function RecordPage() {
   const router = useRouter();
@@ -57,6 +57,14 @@ export default function RecordPage() {
   const [armCount, setArmCount] = useState(ARM_SECONDS);
 
   const [isSaving, setIsSaving] = useState(false);
+  // ベストフレーム保持
+  const bestBlobRef = useRef<Blob | null>(null);
+  const bestScoreRef = useRef<number>(-Infinity);
+  const snapshotBusyRef = useRef(false);
+  // 瞬き/選定用
+  const prevMinOpenRef = useRef<number>(1);
+  const blinkSuppressUntilRef = useRef<number>(0);
+  const selEmaRef = useRef<number>(0);
 
   // blob URL 解放
   useEffect(() => {
@@ -90,12 +98,15 @@ export default function RecordPage() {
             // iOS安定化：小休止→play
             await new Promise((r) => setTimeout(r, 50));
             await v.play();
-            setMsg("笑顔を検出中です。良い表情になったら3秒で撮影します。");
+            setMsg(
+              "点眼後の写真を撮ります。10秒の間で最も良い笑顔を記録します。"
+            );
             setBadgeText("笑顔を検出中…");
 
             // MediaPipe 初期化 → ウォッチ開始
             await initSmileModel();
             startSmileWatch();
+            startArm();
           } catch {
             setMsg(
               "動画の再生に失敗しました。別のブラウザ／端末でお試しください。"
@@ -195,45 +206,88 @@ export default function RecordPage() {
       // 簡易スムージング（1フレームぶれ対策）
       setSmileScore((prev) => prev * 0.6 + S * 0.4);
 
-      // 段階（tier）更新＆メッセージ
-      const nextTier: 0 | 1 | 2 | 3 =
-        S >= TIER3 ? 3 : S >= TIER2 ? 2 : S >= TIER1 ? 1 : 0;
-
-      // setInterval のクロージャで state が古くなるのを避けるため、
-      // カウントダウン中かどうかは armTimerRef の有無で判定する
-      const isArming = Boolean(armTimerRef.current);
-
-      // カウントダウン中に笑顔がしきい値未満になったら中断
-      let didCancelArm = false;
-      if (isArming && nextTier < 2) {
-        cancelArm();
-        setMsg("笑顔を絶やさないで！");
-        setBadgeText("笑顔を絶やさないで！");
-        didCancelArm = true;
+      // ---- 候補フィルタ：瞬き/大口あけを除外 ----
+      const nowTs = performance.now();
+      const minOpen = Math.min(P_open_L, P_open_R);
+      // 瞬き急落検知（2フレーム以内の急落を想定）
+      if (prevMinOpenRef.current > 0.6 && minOpen < 0.15) {
+        blinkSuppressUntilRef.current = nowTs + 220; // 約200ms除外
       }
+      prevMinOpenRef.current = minOpen;
 
-      if (nextTier !== tier) {
-        setTier(nextTier);
-        if (!didCancelArm) {
-          if (nextTier === 3) {
-            setMsg("最高の笑顔！そのままキープで3秒カウント開始！");
-            setBadgeText("最高の笑顔！✨");
-          } else if (nextTier === 2) {
-            setMsg("すごくいい表情です！");
-            setBadgeText("すごくいい！😁");
-          } else if (nextTier === 1) {
-            setMsg("いいですね、その調子！");
-            setBadgeText("いいですね😊");
+      // 口の開き具合（比率）計算と jawOpen
+      let mouthOpenRatio = 0;
+      if (face) {
+        const PL = face[MOUTH_LEFT_IDX];
+        const PR = face[MOUTH_RIGHT_IDX];
+        const PB = face[MOUTH_BOTTOM_CENTER_IDX];
+        if (PL && PR && PB) {
+          const midX = (PL.x + PR.x) / 2;
+          const midY = (PL.y + PR.y) / 2;
+          const mouthWidth = Math.hypot(PR.x - PL.x, PR.y - PL.y);
+          const mouthHeight = Math.hypot(PB.x - midX, PB.y - midY);
+          if (mouthWidth > 1e-6) mouthOpenRatio = mouthHeight / mouthWidth;
+        }
+      }
+      const jawOpen = bs?.find((c) => c.categoryName === "jawOpen")?.score ?? 0;
+
+      const notBlinkWindow = nowTs >= blinkSuppressUntilRef.current;
+      const eyesOk = minOpen >= 0.25;
+      const mouthShapeOk = s_mouth >= 0.3;
+      const mouthOpenOk = mouthOpenRatio <= 0.45 && jawOpen <= 0.6;
+      const candidateAllowed =
+        notBlinkWindow && eyesOk && mouthShapeOk && mouthOpenOk;
+
+      // 選定用のEMAスコア（瞬間スパイク抑制）
+      const selScore = selEmaRef.current * 0.6 + S * 0.4;
+      selEmaRef.current = selScore;
+
+      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）
+      if (candidateAllowed && selScore > bestScoreRef.current + 0.01) {
+        const vEl = videoRef.current;
+        const c = canvasRef.current;
+        if (vEl && c && !snapshotBusyRef.current && vEl.videoWidth > 0) {
+          snapshotBusyRef.current = true;
+          c.width = vEl.videoWidth;
+          c.height = vEl.videoHeight;
+          const ctx = c.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(vEl, 0, 0, c.width, c.height);
+            c.toBlob(
+              (b) => {
+                if (b) {
+                  bestBlobRef.current = b;
+                  bestScoreRef.current = selScore;
+                }
+                snapshotBusyRef.current = false;
+              },
+              "image/jpeg",
+              0.9
+            );
           } else {
-            setMsg("リラックスしていきましょう。");
-            setBadgeText("リラックスしてどうぞ");
+            snapshotBusyRef.current = false;
           }
         }
       }
 
-      // しきい値に達したらアーム（未アームのときのみ）
-      if (!isArming && nextTier >= 2) {
-        startArm();
+      // 段階（tier）更新＆メッセージ（カウントダウンとは独立）
+      const nextTier: 0 | 1 | 2 | 3 =
+        S >= TIER3 ? 3 : S >= TIER2 ? 2 : S >= TIER1 ? 1 : 0;
+      if (nextTier !== tier) {
+        setTier(nextTier);
+        if (nextTier === 3) {
+          setMsg("最高の笑顔！");
+          setBadgeText("最高の笑顔！✨");
+        } else if (nextTier === 2) {
+          setMsg("すごくいい表情です！");
+          setBadgeText("すごくいい！😁");
+        } else if (nextTier === 1) {
+          setMsg("いいですね、その調子！");
+          setBadgeText("いいですね😊");
+        } else {
+          setMsg("リラックスしてどうぞ。");
+          setBadgeText("リラックスしてどうぞ");
+        }
       }
     }, 120); // だいたい ~8fps 程度
   }
@@ -245,11 +299,13 @@ export default function RecordPage() {
     }
   }
 
-  // ---- 撮影前の3秒カウント ----
+  // ---- 記録ウィンドウのカウント ----
   function startArm() {
     if (armTimerRef.current) return;
     setArmed(true);
     setArmCount(ARM_SECONDS);
+    bestBlobRef.current = null;
+    bestScoreRef.current = -Infinity;
 
     armTimerRef.current = setInterval(() => {
       setArmCount((prev) => {
@@ -257,7 +313,7 @@ export default function RecordPage() {
           clearInterval(armTimerRef.current!);
           armTimerRef.current = null;
           setArmed(false);
-          // 撮影へ
+          // ベストで撮影へ
           void capture();
           return 0;
         }
@@ -285,7 +341,7 @@ export default function RecordPage() {
     }
   }
 
-  // ---- 撮影処理 ----
+  // ---- 撮影処理（10秒間でのベストフレームを保存） ----
   const capture = async () => {
     if (capturedRef.current) return;
     capturedRef.current = true;
@@ -306,25 +362,26 @@ export default function RecordPage() {
     // シャッター演出
     setShutter(true);
 
-    // フレームをキャンバスへ
-    c.width = v.videoWidth;
-    c.height = v.videoHeight;
-    const ctx = c.getContext("2d");
-    if (!ctx) {
-      capturedRef.current = false;
-      startSmileWatch();
-      return;
+    // ベストがなければ現在フレームを取得
+    let blob: Blob | null = bestBlobRef.current;
+    if (!blob) {
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      const ctx = c.getContext("2d");
+      if (!ctx) {
+        capturedRef.current = false;
+        startSmileWatch();
+        return;
+      }
+      ctx.drawImage(v, 0, 0, c.width, c.height);
+      blob = await new Promise((resolve, reject) => {
+        c.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+          "image/jpeg",
+          0.9
+        );
+      });
     }
-    ctx.drawImage(v, 0, 0, c.width, c.height);
-
-    // Blob へ
-    const blob: Blob = await new Promise((resolve, reject) => {
-      c.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
-        "image/jpeg",
-        0.9
-      );
-    });
 
     // 表示
     const url = URL.createObjectURL(blob);
@@ -346,12 +403,13 @@ export default function RecordPage() {
       id,
       takenAt: nowIso,
       eye,
-      blob,
-      smileScore, // 直近のスムージング済みスコア
+      blob: blob!,
+      smileScore:
+        bestScoreRef.current === -Infinity ? smileScore : bestScoreRef.current,
     });
 
     setIsSaving(false);
-    setMsg("撮影しました。記録しました！");
+    setMsg("いい笑顔ですね！記録しました。");
     setTimeout(() => setShutter(false), 200);
   };
 
@@ -377,7 +435,7 @@ export default function RecordPage() {
     // UIリセット
     setShowImage(false);
     setSnapUrl(null);
-    setMsg("笑顔を検出中です。良い表情になったら3秒で撮影します。");
+    setMsg("点眼後の写真を撮ります。10秒の間で最も良い笑顔を記録します。");
     setBadgeText("笑顔を検出中…");
     capturedRef.current = false;
 
@@ -388,6 +446,7 @@ export default function RecordPage() {
         await new Promise((r) => setTimeout(r, 50));
         await v.play();
         startSmileWatch();
+        startArm();
       } catch {
         setMsg("動画の再生に失敗しました。もう一度お試しください。");
         setBadgeText("");
@@ -401,6 +460,29 @@ export default function RecordPage() {
   return (
     <main className="min-h-dvh flex flex-col items-center gap-4 p-6">
       <h1 className="text-xl font-semibold">点眼記録をつける</h1>
+
+      {/* カウントダウン（フレーム外上部に表示） */}
+      {!showImage && armed && (
+        <div className="w-full max-w-sm flex justify-center">
+          <div
+            className="relative h-28 w-28 text-black"
+            role="img"
+            aria-label={`撮影まであと${armCount}秒`}
+          >
+            <div
+              className="absolute inset-0 rounded-full"
+              style={{
+                background: `conic-gradient(currentColor ${
+                  ((ARM_SECONDS - armCount) / ARM_SECONDS) * 360
+                }deg, #e5e7eb 0deg)`,
+              }}
+            />
+            <div className="absolute inset-[6px] rounded-full bg-white/80 backdrop-blur grid place-items-center shadow">
+              <span className="text-4xl font-bold tabular-nums">{armCount}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* カメラと画像を同じ枠内で切り替え */}
       <div className="relative w-full max-w-sm aspect-video overflow-hidden rounded-2xl shadow">
@@ -449,30 +531,7 @@ export default function RecordPage() {
           </div>
         )}
 
-        {/* 撮影前の3秒カウント（armed時のみ） */}
-        {!showImage && armed && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center">
-            <div
-              className="relative h-28 w-28 text-black"
-              role="img"
-              aria-label={`撮影まであと${armCount}秒`}
-            >
-              <div
-                className="absolute inset-0 rounded-full"
-                style={{
-                  background: `conic-gradient(currentColor ${
-                    ((ARM_SECONDS - armCount) / ARM_SECONDS) * 360
-                  }deg, #e5e7eb 0deg)`,
-                }}
-              />
-              <div className="absolute inset-[6px] rounded-full bg-white/80 backdrop-blur grid place-items-center shadow">
-                <span className="text-4xl font-bold tabular-nums">
-                  {armCount}
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
+        
 
         {/* シャッター幕 */}
         <div className="pointer-events-none absolute inset-0">
