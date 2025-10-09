@@ -384,6 +384,12 @@ export default function RecordPage() {
     }
 
     // 表示
+    if (!blob) {
+      setIsSaving(false);
+      setMsg("画像の生成に失敗しました。もう一度お試しください。");
+      capturedRef.current = false;
+      return;
+    }
     const url = URL.createObjectURL(blob);
     setSnapUrl(url);
     setShowImage(true);
