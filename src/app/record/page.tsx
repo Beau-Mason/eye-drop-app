@@ -12,9 +12,9 @@ import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 type Eye = "left" | "right" | "both";
 
 // 笑顔スコアの段階化用（お好みで微調整）
-const TIER1 = 0.4;
-const TIER2 = 0.6;
-const TIER3 = 0.8;
+const TIER1 = 0.5;
+const TIER2 = 0.7;
+const TIER3 = 0.9;
 
 // 記録ウィンドウ（カウントダウン）秒数
 const ARM_SECONDS = 10;
@@ -65,6 +65,21 @@ export default function RecordPage() {
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
   const selEmaRef = useRef<number>(0);
+  // 😊 パーティクル（視覚フィードバック）
+  type EmojiParticle = {
+    id: number;
+    x: number; // % (0-100)
+    y: number; // % (0-100)
+    size: number; // px
+    duration: number; // ms
+    emoji: string;
+    dxStart: number; // px
+    dxEnd: number; // px
+  };
+  const [particles, setParticles] = useState<EmojiParticle[]>([]);
+  const particleIdRef = useRef(0);
+  const lastSpawnRef = useRef(0);
+  const reduceMotionRef = useRef(false);
 
   // blob URL 解放
   useEffect(() => {
@@ -74,6 +89,16 @@ export default function RecordPage() {
       }
     };
   }, [snapUrl]);
+
+  // 低モーション設定の検出
+  useEffect(() => {
+    try {
+      reduceMotionRef.current =
+        typeof window !== "undefined" &&
+        window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch {}
+  }, []);
 
   // カメラ起動＆笑顔ウォッチ開始
   useEffect(() => {
@@ -98,10 +123,8 @@ export default function RecordPage() {
             // iOS安定化：小休止→play
             await new Promise((r) => setTimeout(r, 50));
             await v.play();
-            setMsg(
-              "点眼後の写真を撮ります。10秒の間で最も良い笑顔を記録します。"
-            );
-            setBadgeText("笑顔を検出中…");
+            setMsg("点眼後の写真を撮ります。カメラに顔を写してください。");
+            setBadgeText("ゆったりどうぞ");
 
             // MediaPipe 初期化 → ウォッチ開始
             await initSmileModel();
@@ -276,18 +299,35 @@ export default function RecordPage() {
       if (nextTier !== tier) {
         setTier(nextTier);
         if (nextTier === 3) {
-          setMsg("最高の笑顔！");
-          setBadgeText("最高の笑顔！✨");
+          setMsg("最高！");
+          setBadgeText("最高！✨");
+          spawnEmoji(3);
         } else if (nextTier === 2) {
-          setMsg("すごくいい表情です！");
+          setMsg("すごくいいです！");
           setBadgeText("すごくいい！😁");
+          spawnEmoji(2);
         } else if (nextTier === 1) {
-          setMsg("いいですね、その調子！");
+          setMsg("その調子！");
           setBadgeText("いいですね😊");
+          spawnEmoji(1);
         } else {
-          setMsg("リラックスしてどうぞ。");
-          setBadgeText("リラックスしてどうぞ");
+          setMsg("ゆったりどうぞ。");
+          setBadgeText("ゆったりどうぞ");
         }
+      }
+
+      // スコアに応じて定期的に少数スポーン（控えめ）
+      const nowTs2 = performance.now();
+      const baseInterval = 1600; // ms
+      const minInterval = 450; // ms
+      const interval = Math.max(minInterval, baseInterval - S * 1100);
+      if (
+        !reduceMotionRef.current &&
+        nowTs2 - lastSpawnRef.current > interval
+      ) {
+        const count = S > 0.85 ? 2 : 1;
+        spawnEmoji(count);
+        lastSpawnRef.current = nowTs2;
       }
     }, 120); // だいたい ~8fps 程度
   }
@@ -297,6 +337,31 @@ export default function RecordPage() {
       clearInterval(smileTimerRef.current);
       smileTimerRef.current = null;
     }
+  }
+
+  // ---- 😊 エフェクト生成 ----
+  function spawnEmoji(count: number) {
+    if (reduceMotionRef.current || count <= 0) return;
+    setParticles((prev) => {
+      const next = prev.slice(-18); // 上限に向けて抑制
+      for (let i = 0; i < count; i++) {
+        const id = ++particleIdRef.current;
+        // 画面の周囲に散らす：中央帯(30-70%)を避けて左右寄りを優先
+        const x = (Math.random() < 0.5 ? 5 + Math.random() * 25 : 70 + Math.random() * 25); // 5–30% or 70–95%
+        const y = 10 + Math.random() * 80; // 10–90%
+        const size = 18 + Math.random() * 10;
+        const duration = 800 + Math.random() * 700;
+        const emoji = Math.random() < 0.2 ? "✨" : "😊";
+        // ほんの少し左右に流す
+        const dxStart = (Math.random() - 0.5) * 10; // -5〜5px
+        const dxEnd = dxStart + (Math.random() - 0.5) * 24; // 終端でさらに広がる
+        next.push({ id, x, y, size, duration, emoji, dxStart, dxEnd });
+        setTimeout(() => {
+          setParticles((p) => p.filter((e) => e.id !== id));
+        }, duration + 60);
+      }
+      return next.slice(-20);
+    });
   }
 
   // ---- 記録ウィンドウのカウント ----
@@ -415,7 +480,7 @@ export default function RecordPage() {
     });
 
     setIsSaving(false);
-    setMsg("いい笑顔ですね！記録しました。");
+    setMsg("記録しました。素敵な笑顔ですね！今日も目薬頑張ってて偉い！👏");
     setTimeout(() => setShutter(false), 200);
   };
 
@@ -441,8 +506,8 @@ export default function RecordPage() {
     // UIリセット
     setShowImage(false);
     setSnapUrl(null);
-    setMsg("点眼後の写真を撮ります。10秒の間で最も良い笑顔を記録します。");
-    setBadgeText("笑顔を検出中…");
+    setMsg("点眼後の写真を撮ります。カメラに顔を写してください。");
+    setBadgeText("");
     capturedRef.current = false;
 
     // 再開
@@ -464,14 +529,14 @@ export default function RecordPage() {
   };
 
   return (
-    <main className="min-h-dvh flex flex-col items-center gap-4 p-6">
-      <h1 className="text-xl font-semibold">点眼記録をつける</h1>
+    <main className="min-h-dvh flex flex-col items-center gap-5 p-6">
+      <h1 className="text-2xl md:text-3xl font-semibold">点眼記録をつける</h1>
 
       {/* カウントダウン（フレーム外上部に表示） */}
       {!showImage && armed && (
         <div className="w-full max-w-sm flex justify-center">
           <div
-            className="relative h-28 w-28 text-black"
+            className="relative h-28 w-28 text-black dark:text-white"
             role="img"
             aria-label={`撮影まであと${armCount}秒`}
           >
@@ -483,8 +548,10 @@ export default function RecordPage() {
                 }deg, #e5e7eb 0deg)`,
               }}
             />
-            <div className="absolute inset-[6px] rounded-full bg-white/80 backdrop-blur grid place-items-center shadow">
-              <span className="text-4xl font-bold tabular-nums">{armCount}</span>
+            <div className="absolute inset-[6px] rounded-full bg-white/80 dark:bg-black/60 backdrop-blur grid place-items-center shadow">
+              <span className="text-4xl md:text-5xl font-bold tabular-nums">
+                {armCount}
+              </span>
             </div>
           </div>
         </div>
@@ -521,7 +588,7 @@ export default function RecordPage() {
         {!showImage && badgeText && (
           <div className="pointer-events-none absolute inset-0 grid place-items-start p-3">
             <div
-              className={`rounded-full px-3 py-1 text-xs font-semibold bg-white/90 backdrop-blur shadow animate-pop`}
+              className={`rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow animate-pop`}
             >
               {badgeText}
             </div>
@@ -531,13 +598,35 @@ export default function RecordPage() {
         {/* 笑顔スコアのリアルタイム表示 */}
         {!showImage && (
           <div className="pointer-events-none absolute top-0 right-0 p-3">
-            <div className="rounded-full px-3 py-1 text-xs font-semibold bg-white/90 backdrop-blur shadow">
+            <div className="rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow">
               S: {smileScore.toFixed(2)}
             </div>
           </div>
         )}
 
-        
+        {/* 😊 エフェクト（スコア連動） */}
+        {!showImage && particles.length > 0 && (
+          <div className="pointer-events-none absolute inset-0">
+            {particles.map((p) => (
+              <span
+                key={p.id}
+                className="emoji-pop absolute select-none"
+                style={
+                  {
+                    left: `${p.x}%`,
+                    top: `${p.y}%`,
+                    fontSize: `${p.size}px`,
+                    animationDuration: `${p.duration}ms`,
+                    "--dx-start": `${p.dxStart}px`,
+                    "--dx-end": `${p.dxEnd}px`,
+                  } as React.CSSProperties & Record<string, string>
+                }
+              >
+                {p.emoji}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* シャッター幕 */}
         <div className="pointer-events-none absolute inset-0">
@@ -550,7 +639,7 @@ export default function RecordPage() {
       </div>
 
       {/* メッセージ（読み上げ対応） */}
-      <p className="text-sm text-gray-700" aria-live="polite" role="status">
+      <p className="text-base md:text-lg text-gray-800 dark:text-gray-200" aria-live="polite" role="status">
         {msg}
       </p>
 
@@ -558,7 +647,7 @@ export default function RecordPage() {
         {!snapUrl ? (
           <button
             onClick={handleCancel}
-            className="px-4 py-2 rounded-xl border"
+            className="px-5 py-3 rounded-2xl border text-base md:text-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
           >
             キャンセル
           </button>
@@ -567,19 +656,19 @@ export default function RecordPage() {
             <button
               onClick={handleRetake}
               disabled={isSaving}
-              className="px-4 py-2 rounded-xl border disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-5 py-3 rounded-2xl border text-base md:text-lg disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
             >
               撮り直す
             </button>
             <button
               onClick={() => router.push("/")}
-              className="px-4 py-2 rounded-xl bg-black text-white"
+              className="px-5 py-3 rounded-2xl bg-black text-white text-base md:text-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
             >
               はじめのページへ戻る
             </button>
             <button
               onClick={() => router.push("/history")}
-              className="px-4 py-2 rounded-xl border"
+              className="px-5 py-3 rounded-2xl border text-base md:text-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
             >
               記録を閲覧
             </button>
@@ -621,6 +710,28 @@ export default function RecordPage() {
         }
         .shutter {
           animation: flash 180ms ease-in-out;
+        }
+
+        /* 😊 バブル（ふわっと浮かぶ） */
+        @keyframes float-up {
+          0% {
+            transform: translate(var(--dx-start, 0px), 6px) scale(0.9);
+            opacity: 0;
+          }
+          15% {
+            opacity: 1;
+          }
+          100% {
+            transform: translate(var(--dx-end, 0px), -28px) scale(1.08);
+            opacity: 0;
+          }
+        }
+        .emoji-pop {
+          animation-name: float-up;
+          animation-timing-function: ease-out;
+          animation-fill-mode: both;
+          text-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+          will-change: transform, opacity;
         }
       `}</style>
     </main>
