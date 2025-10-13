@@ -86,19 +86,19 @@ export default function HistoryPage() {
   return (
     <main className="mx-auto max-w-xl p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">記録履歴</h1>
+        <h1 className="text-2xl font-semibold">記録履歴</h1>
         <button
           onClick={() => router.push("/")}
-          className="inline-flex items-center gap-1 rounded-xl border px-3 py-2"
+          className="inline-flex items-center gap-1 rounded-2xl btn-outline px-4 py-2"
           aria-label="はじめのページへ戻る"
         >
           ← はじめのページへ
         </button>
       </div>
 
-      <ul className="grid grid-cols-2 gap-3">
+      <ul className="grid grid-cols-2 gap-4">
         {items.map(({ snap, url }) => (
-          <li key={snap.id} className="rounded-xl overflow-hidden border">
+          <li key={snap.id} className="rounded-2xl overflow-hidden glass shadow border border-white/20">
             <div className="relative w-full aspect-video">
               <Image
                 src={url}
@@ -110,10 +110,31 @@ export default function HistoryPage() {
                 onError={() => handleImageError(snap.id)}
               />
             </div>
-            <div className="p-2 text-xs opacity-70">
-              {new Date(snap.takenAt).toLocaleString()}（
-              {snap.eye === "both" ? "両" : snap.eye === "left" ? "左" : "右"}）
+            <div className="p-2 text-xs opacity-80">
+              {new Date(snap.takenAt).toLocaleString()}
             </div>
+            {/* スコア表示（控えめな薄青バッジ） */}
+            <div className="px-2 pb-1 flex items-center gap-2">
+              {(() => {
+                const s = Math.max(0, Math.min(1, snap.smileScore ?? 0));
+                const emoji = s >= 0.8 ? "✨" : s >= 0.6 ? "😁" : s >= 0.4 ? "😊" : "🙂";
+                return (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-100"
+                  >
+                    {emoji} 笑顔スコア {s.toFixed(2)}
+                  </span>
+                );
+              })()}
+            </div>
+            {/* フィードバックコメント（少し目立つ薄青カード） */}
+            {snap.note && (
+              <div className="px-2 pb-2">
+                <div className="rounded-xl px-3 py-2 text-sm shadow border border-sky-200/80 bg-sky-50 text-sky-900 dark:bg-sky-900/30 dark:text-sky-100 dark:border-sky-400/30">
+                  {snap.note}
+                </div>
+              </div>
+            )}
             <button
               onClick={() => remove(snap.id)}
               className="m-2 text-xs underline"
