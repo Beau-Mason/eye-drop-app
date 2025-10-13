@@ -3,6 +3,8 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --accent-start: #7c3aed; /* violet-600 */
+  --accent-end: #06b6d4;   /* cyan-500 */
 }
 
 @theme inline {
@@ -16,11 +18,50 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --accent-start: #8b5cf6; /* lighter violet */
+    --accent-end: #22d3ee;   /* lighter cyan */
   }
 }
 
 body {
-  background: var(--background);
+  /* Soft gradient background with subtle radial accents */
+  background:
+    radial-gradient(1200px 600px at 0% -10%, color-mix(in oklab, var(--accent-start) 10%, transparent) 0%, transparent 60%),
+    radial-gradient(1000px 500px at 110% 10%, color-mix(in oklab, var(--accent-end) 12%, transparent) 0%, transparent 65%),
+    linear-gradient(180deg, color-mix(in oklab, var(--background) 98%, transparent) 0%, var(--background) 60%);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Glassy surface helper */
+.glass {
+  background: color-mix(in oklab, var(--background) 86%, transparent);
+  backdrop-filter: blur(10px) saturate(1.05);
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+}
+
+/* Gradient border wrapper: place content as a child with .inner */
+.gradient-border {
+  position: relative;
+  padding: 2px;
+  border-radius: 1.25rem; /* ~ rounded-2xl */
+  background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+}
+.gradient-border .inner {
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--background) 92%, transparent);
+}
+
+/* Primary gradient button */
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+  color: white;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+}
+.btn-primary:hover { filter: brightness(1.05); }
+.btn-primary:active { filter: brightness(0.95); }
+
+.btn-outline {
+  border: 1px solid color-mix(in oklab, var(--foreground) 15%, transparent);
+  background: color-mix(in oklab, var(--background) 92%, transparent);
 }

@@ -65,6 +65,54 @@ export default function RecordPage() {
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
   const selEmaRef = useRef<number>(0);
+  // 撮影後のメッセージ中間部分（バリエーション）
+  const midPhrases: string[] = [
+    "素敵な笑顔ですね！",
+    "ナイススマイル！",
+    "いい表情です！",
+    "スマイル全開です！",
+    "晴れやかな表情ですね！",
+    "すごく良い表情です！",
+    "とても映えてます！",
+    "その笑顔，最高です！",
+    "とっても爽やかです！",
+    "自然で素敵な笑顔です！",
+    "パーフェクトスマイルです！",
+    "とびきりの笑顔ですね！",
+    "今日一番の笑顔ですね！",
+    "元気をもらえる笑顔ですね！",
+    "とても魅力的な笑顔です！",
+    "満点の笑顔！",
+    "ばっちりの笑顔！",
+    "とてもチャーミングです！",
+    "すごく素敵！",
+    "見惚れてしまう笑顔です！",
+    "最高のワンショットです！",
+    "元気いっぱいですね！",
+    "とてもいい表情です！",
+    "気持ちの良い笑顔ですね！",
+    "とても輝いています！",
+    "弾ける笑顔が素敵です！",
+    "爽やかなスマイルですね！",
+  ];
+  const MID_PHRASE_INDEX_KEY = "midPhraseIndex_v1";
+  const chooseMiddle = () => {
+    try {
+      const raw =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(MID_PHRASE_INDEX_KEY)
+          : null;
+      let idx = raw ? parseInt(raw, 10) : 0;
+      if (!Number.isFinite(idx) || idx < 0 || idx >= midPhrases.length) idx = 0;
+      const phrase = midPhrases[idx] ?? midPhrases[0];
+      const next = (idx + 1) % midPhrases.length;
+      if (typeof window !== "undefined")
+        window.localStorage.setItem(MID_PHRASE_INDEX_KEY, String(next));
+      return phrase;
+    } catch {
+      return midPhrases[0];
+    }
+  };
   // 😊 パーティクル（視覚フィードバック）
   type EmojiParticle = {
     id: number;
@@ -347,7 +395,10 @@ export default function RecordPage() {
       for (let i = 0; i < count; i++) {
         const id = ++particleIdRef.current;
         // 画面の周囲に散らす：中央帯(30-70%)を避けて左右寄りを優先
-        const x = (Math.random() < 0.5 ? 5 + Math.random() * 25 : 70 + Math.random() * 25); // 5–30% or 70–95%
+        const x =
+          Math.random() < 0.5
+            ? 5 + Math.random() * 25
+            : 70 + Math.random() * 25; // 5–30% or 70–95%
         const y = 10 + Math.random() * 80; // 10–90%
         const size = 18 + Math.random() * 10;
         const duration = 800 + Math.random() * 700;
@@ -470,17 +521,21 @@ export default function RecordPage() {
     const id = uuid();
     lastSnapIdRef.current = id;
 
+    const finalScore =
+      bestScoreRef.current === -Infinity ? smileScore : bestScoreRef.current;
+    const middle = chooseMiddle();
+
     await db.snaps.put({
       id,
       takenAt: nowIso,
       eye,
       blob: blob!,
-      smileScore:
-        bestScoreRef.current === -Infinity ? smileScore : bestScoreRef.current,
+      smileScore: finalScore,
+      note: middle, // 中間部分を保存
     });
 
     setIsSaving(false);
-    setMsg("記録しました。素敵な笑顔ですね！今日も目薬頑張ってて偉い！👏");
+    setMsg(`記録しました。${middle} 今日も点眼頑張ってて偉い！👏`);
     setTimeout(() => setShutter(false), 200);
   };
 
@@ -557,89 +612,95 @@ export default function RecordPage() {
         </div>
       )}
 
-      {/* カメラと画像を同じ枠内で切り替え */}
-      <div className="relative w-full max-w-sm aspect-video overflow-hidden rounded-2xl shadow">
-        {/* ライブ映像 */}
-        <video
-          ref={videoRef}
-          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-200 ${
-            showImage ? "opacity-0" : "opacity-100"
-          }`}
-          playsInline
-          muted
-          autoPlay
-        />
-
-        {/* 撮影画像 */}
-        {snapUrl && (
-          <Image
-            src={snapUrl}
-            alt="撮影結果"
-            fill
-            sizes="(max-width: 640px) 100vw, 640px"
-            unoptimized
-            className={`object-cover transition-opacity duration-200 ${
-              showImage ? "opacity-100" : "opacity-0"
+      {/* カメラと画像を同じ枠内で切り替え（リッチなフレーム） */}
+      <div className="gradient-border w-full max-w-sm">
+        <div className="inner relative aspect-video overflow-hidden rounded-2xl shadow">
+          {/* ライブ映像 */}
+          <video
+            ref={videoRef}
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-200 ${
+              showImage ? "opacity-0" : "opacity-100"
             }`}
+            playsInline
+            muted
+            autoPlay
           />
-        )}
 
-        {/* 笑顔フィードバック（軽いバッジ） */}
-        {!showImage && badgeText && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-start p-3">
-            <div
-              className={`rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow animate-pop`}
-            >
-              {badgeText}
-            </div>
-          </div>
-        )}
+          {/* 撮影画像 */}
+          {snapUrl && (
+            <Image
+              src={snapUrl}
+              alt="撮影結果"
+              fill
+              sizes="(max-width: 640px) 100vw, 640px"
+              unoptimized
+              className={`object-cover transition-opacity duration-200 ${
+                showImage ? "opacity-100" : "opacity-0"
+              }`}
+            />
+          )}
 
-        {/* 笑顔スコアのリアルタイム表示 */}
-        {!showImage && (
-          <div className="pointer-events-none absolute top-0 right-0 p-3">
-            <div className="rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow">
-              S: {smileScore.toFixed(2)}
-            </div>
-          </div>
-        )}
-
-        {/* 😊 エフェクト（スコア連動） */}
-        {!showImage && particles.length > 0 && (
-          <div className="pointer-events-none absolute inset-0">
-            {particles.map((p) => (
-              <span
-                key={p.id}
-                className="emoji-pop absolute select-none"
-                style={
-                  {
-                    left: `${p.x}%`,
-                    top: `${p.y}%`,
-                    fontSize: `${p.size}px`,
-                    animationDuration: `${p.duration}ms`,
-                    "--dx-start": `${p.dxStart}px`,
-                    "--dx-end": `${p.dxEnd}px`,
-                  } as React.CSSProperties & Record<string, string>
-                }
+          {/* 笑顔フィードバック（軽いバッジ） */}
+          {!showImage && badgeText && (
+            <div className="pointer-events-none absolute inset-0 grid place-items-start p-3">
+              <div
+                className={`rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow animate-pop`}
               >
-                {p.emoji}
-              </span>
-            ))}
-          </div>
-        )}
+                {badgeText}
+              </div>
+            </div>
+          )}
 
-        {/* シャッター幕 */}
-        <div className="pointer-events-none absolute inset-0">
-          <div
-            className={`absolute inset-0 bg-white transition-opacity duration-150 ${
-              shutter ? "opacity-100" : "opacity-0"
-            }`}
-          />
+          {/* 笑顔スコアのリアルタイム表示 */}
+          {!showImage && (
+            <div className="pointer-events-none absolute top-0 right-0 p-3">
+              <div className="rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow">
+                笑顔スコア: {smileScore.toFixed(2)}
+              </div>
+            </div>
+          )}
+
+          {/* 😊 エフェクト（スコア連動） */}
+          {!showImage && particles.length > 0 && (
+            <div className="pointer-events-none absolute inset-0">
+              {particles.map((p) => (
+                <span
+                  key={p.id}
+                  className="emoji-pop absolute select-none"
+                  style={
+                    {
+                      left: `${p.x}%`,
+                      top: `${p.y}%`,
+                      fontSize: `${p.size}px`,
+                      animationDuration: `${p.duration}ms`,
+                      "--dx-start": `${p.dxStart}px`,
+                      "--dx-end": `${p.dxEnd}px`,
+                    } as React.CSSProperties & Record<string, string>
+                  }
+                >
+                  {p.emoji}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* シャッター幕 */}
+          <div className="pointer-events-none absolute inset-0">
+            <div
+              className={`absolute inset-0 bg-white transition-opacity duration-150 ${
+                shutter ? "opacity-100" : "opacity-0"
+              }`}
+            />
+          </div>
         </div>
       </div>
 
       {/* メッセージ（読み上げ対応） */}
-      <p className="text-base md:text-lg text-gray-800 dark:text-gray-200" aria-live="polite" role="status">
+      <p
+        className="text-base md:text-lg text-gray-800 dark:text-gray-200"
+        aria-live="polite"
+        role="status"
+      >
         {msg}
       </p>
 
