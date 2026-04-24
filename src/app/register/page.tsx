@@ -78,9 +78,13 @@ export default function RegisterPage() {
         <p className="font-semibold mb-1">研究者に送られる情報について</p>
         <p className="opacity-80">
           研究者に送信されるのは
-          <span className="font-semibold">撮影日時・笑顔スコア・表示されたメッセージ</span>
+          <span className="font-semibold">
+            撮影日時・笑顔スコア・表示されたメッセージ
+          </span>
           のみです。撮影した
-          <span className="font-semibold">顔写真はこの端末内にのみ保存され、外部に送信されません</span>
+          <span className="font-semibold">
+            顔写真はこの端末内にのみ保存され、外部に送信されません
+          </span>
           。
         </p>
       </div>
@@ -92,7 +96,7 @@ export default function RegisterPage() {
           required
           disabled={alreadyRegistered} // 登録済みなら入力できないように
           className="w-full rounded-2xl border px-3 py-2 bg-white/90 dark:bg-black/60"
-          placeholder="例: ABCD-1234"
+          placeholder="例: EYE-XXXX-XXXX"
           inputMode="text"
           autoCapitalize="characters"
         />
