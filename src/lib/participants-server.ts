@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { hashInviteCode } from "@/lib/auth-server";
 
-type ParticipantEntry = {
+export type ParticipantEntry = {
   participantId: string;
   codeHash: string;
   issuedAt: string;

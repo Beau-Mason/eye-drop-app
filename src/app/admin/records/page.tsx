@@ -1,86 +1,78 @@
-// 研究者向け記録閲覧ページ（サーバーコンポーネント）。
+// 研究者向け参加者一覧ページ（サーバーコンポーネント）。
+// 参加者ごとに件数を表示し、クリックで個別の記録ページに遷移する。
 // このページへのアクセスは src/middleware.ts の Basic 認証で保護されている。
 
+import Link from "next/link";
 import { listAllSnapMeta } from "@/lib/db-server";
-import { listAllParticipants } from "@/lib/participants-server";
+import {
+  listAllParticipants,
+  type ParticipantEntry,
+} from "@/lib/participants-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export default async function AdminRecordsPage() {
   const participants = listAllParticipants();
-  const displayMap = new Map<string, string>();
-  participants.forEach((p, i) => {
-    displayMap.set(p.participantId, `P${String(i + 1).padStart(2, "0")}`);
-  });
-
   const rows = await listAllSnapMeta();
 
+  const countMap = new Map<string, number>();
+  for (const r of rows) {
+    countMap.set(r.participantId, (countMap.get(r.participantId) ?? 0) + 1);
+  }
+
+  // 最終記録日時を参加者別に集計（活動状況の把握用）
+  const lastMap = new Map<string, string>();
+  for (const r of rows) {
+    const prev = lastMap.get(r.participantId);
+    if (!prev || r.takenAt > prev) {
+      lastMap.set(r.participantId, r.takenAt);
+    }
+  }
+
   return (
-    <main className="min-h-dvh p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">点眼記録一覧（研究者用）</h1>
+    <main className="min-h-dvh p-6 max-w-3xl mx-auto">
+      <h1 className="text-2xl font-semibold mb-2">参加者一覧（研究者用）</h1>
       <p className="text-sm opacity-70 mb-6">
-        表示されるのは撮影日時・笑顔スコア・フィードバック文のみです。顔写真は端末外に送信されません。
+        参加者をクリックすると、その方の点眼記録が表示されます。
+        顔写真は端末外に送信されていません。
       </p>
 
-      <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-2">参加者別件数</h2>
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="border-b">
-              <th className="text-left py-2 pr-4">参加者</th>
-              <th className="text-right py-2">件数</th>
-            </tr>
-          </thead>
-          <tbody>
-            {participants.map((p, i) => {
-              const count = rows.filter(
-                (r) => r.participantId === p.participantId,
-              ).length;
-              return (
-                <tr key={p.participantId} className="border-b">
-                  <td className="py-1.5 pr-4">
-                    P{String(i + 1).padStart(2, "0")}
-                  </td>
-                  <td className="py-1.5 text-right tabular-nums">{count}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </section>
+      <ul className="divide-y rounded-xl border overflow-hidden">
+        {participants.map((p: ParticipantEntry, i: number) => {
+          const displayId = `P${String(i + 1).padStart(2, "0")}`;
+          const count = countMap.get(p.participantId) ?? 0;
+          const last = lastMap.get(p.participantId);
+          return (
+            <li key={p.participantId}>
+              <Link
+                href={`/admin/records/${displayId}`}
+                className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold text-base">{displayId}</span>
+                  {count === 0 && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                      未使用
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-4 text-sm opacity-80">
+                  <span className="tabular-nums">{count} 件</span>
+                  {last && (
+                    <span className="tabular-nums text-xs opacity-60">
+                      最終: {new Date(last).toLocaleString("ja-JP")}
+                    </span>
+                  )}
+                  <span aria-hidden>›</span>
+                </div>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
 
-      <section>
-        <h2 className="text-lg font-semibold mb-2">記録 ({rows.length} 件)</h2>
-        <table className="w-full text-xs border-collapse">
-          <thead>
-            <tr className="border-b">
-              <th className="text-left py-2 pr-2">参加者</th>
-              <th className="text-left py-2 pr-2">撮影日時</th>
-              <th className="text-left py-2 pr-2">眼</th>
-              <th className="text-right py-2 pr-2">笑顔</th>
-              <th className="text-left py-2 pr-2">フィードバック</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.snapId} className="border-b">
-                <td className="py-1 pr-2">
-                  {displayMap.get(r.participantId) ?? "P??"}
-                </td>
-                <td className="py-1 pr-2 tabular-nums">
-                  {new Date(r.takenAt).toLocaleString("ja-JP")}
-                </td>
-                <td className="py-1 pr-2">{r.eye}</td>
-                <td className="py-1 pr-2 text-right tabular-nums">
-                  {r.smileScore?.toFixed(2) ?? "-"}
-                </td>
-                <td className="py-1 pr-2">{r.feedbackText ?? ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      <p className="mt-6 text-xs opacity-60">合計 {rows.length} 件</p>
     </main>
   );
 }
