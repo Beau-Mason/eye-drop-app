@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { db } from "@/lib/db";
+import { getParticipantId } from "@/lib/settings";
+import { syncPendingSnaps } from "@/lib/sync";
 import { v4 as uuid } from "uuid";
 
 // MediaPipe (CDNのWASM/モデルを利用：ローカル配置派は後述の注釈参照)
@@ -57,6 +59,7 @@ export default function RecordPage() {
   const [armCount, setArmCount] = useState(ARM_SECONDS);
 
   const [isSaving, setIsSaving] = useState(false);
+  const [participantId, setParticipantId] = useState<string | undefined>(undefined);
   // ベストフレーム保持
   const bestBlobRef = useRef<Blob | null>(null);
   const bestScoreRef = useRef<number>(-Infinity);
@@ -128,6 +131,22 @@ export default function RecordPage() {
   const particleIdRef = useRef(0);
   const lastSpawnRef = useRef(0);
   const reduceMotionRef = useRef(false);
+
+  // 参加者IDロード（未登録なら /register へリダイレクト）
+  useEffect(() => {
+    (async () => {
+      try {
+        const pid = await getParticipantId();
+        if (!pid) {
+          router.replace("/register");
+          return;
+        }
+        setParticipantId(pid);
+      } catch {
+        router.replace("/register");
+      }
+    })();
+  }, [router]);
 
   // blob URL 解放
   useEffect(() => {
@@ -254,7 +273,7 @@ export default function RecordPage() {
             // 数値誤差ガード
             cosTheta = Math.max(-1, Math.min(1, cosTheta));
             const thetaDeg = (Math.acos(cosTheta) * 180) / Math.PI; // 度
-            const ALPHA = 1.8;
+            const ALPHA = 1.4;
             const BETA = 0.01;
             s_mouth = ALPHA - BETA * thetaDeg;
           }
@@ -532,11 +551,16 @@ export default function RecordPage() {
       blob: blob!,
       smileScore: finalScore,
       note: middle, // 中間部分を保存
+      participantId,
     });
 
     setIsSaving(false);
     setMsg(`記録しました。${middle} 今日も点眼頑張ってて偉い！👏`);
     setTimeout(() => setShutter(false), 200);
+
+    // メタデータ（顔写真は含まれない）をサーバーへ fire-and-forget 送信。
+    // 失敗しても syncedAt が付かないだけで、次回の送信時にまとめて再試行される。
+    void syncPendingSnaps().catch(() => {});
   };
 
   // ---- キャンセル／撮り直し ----

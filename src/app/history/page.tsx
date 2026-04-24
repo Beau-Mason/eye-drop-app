@@ -50,6 +50,7 @@ export default function HistoryPage() {
   }, []);
 
   const remove = async (id: string) => {
+    if (!window.confirm("この記録を削除しますか？")) return;
     await db.snaps.delete(id);
     setItems((prev) => {
       const target = prev.find((i) => i.snap.id === id);
@@ -137,7 +138,7 @@ export default function HistoryPage() {
             )}
             <button
               onClick={() => remove(snap.id)}
-              className="m-2 text-xs underline"
+              className="m-2 px-3 py-1 text-xs rounded-lg text-red-600 dark:text-red-400 border border-transparent hover:border-red-300 hover:bg-red-50 dark:hover:border-red-700 dark:hover:bg-red-900/30 hover:shadow transition-all"
             >
               削除
             </button>
