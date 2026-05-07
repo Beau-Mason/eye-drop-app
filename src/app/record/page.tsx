@@ -64,21 +64,12 @@ export default function RecordPage() {
     undefined,
   );
   // ベストフレーム保持。
-  // iOS Safari/Brave では drawImage(video, canvas) がフレームを正しく
-  // 捕捉できないケースがあるため、createImageBitmap(video) で GPU 上に
-  // ImageBitmap を非同期生成し、それを保持する。
-  // キャプチャ時に bestCanvas に描画して JPEG にエンコードする。
+  // 監視ループでは workingCanvas (canvasRef) に毎回 video フレームを取り、
+  // それを MediaPipe に渡して解析する。これにより「解析対象のフレーム」と
+  // 「保存するフレーム」が物理的に同じピクセルになる。
+  // ピーク時は workingCanvas → bestCanvas に GPU コピー。
   const bestScoreRef = useRef<number>(-Infinity);
   const bestCanvasRef = useRef<HTMLCanvasElement>(null);
-  const bestImageBitmapRef = useRef<ImageBitmap | null>(null);
-  const closeBestBitmap = () => {
-    if (bestImageBitmapRef.current) {
-      try {
-        bestImageBitmapRef.current.close();
-      } catch {}
-      bestImageBitmapRef.current = null;
-    }
-  };
   // 瞬き検知用
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
@@ -290,10 +281,26 @@ export default function RecordPage() {
     smileTimerRef.current = setInterval(() => {
       const v = videoRef.current;
       const lm = faceLmRef.current;
-      if (!v || !lm || v.paused || v.readyState < 2) return;
+      const wc = canvasRef.current;
+      if (!v || !lm || !wc || v.paused || v.readyState < 2) return;
 
+      // 1. 現在の video フレームを workingCanvas にスナップショット。
+      //    iPhone でも video → canvas の drawImage は同期的にその瞬間の
+      //    フレームを書き込めるので、ここで「今のフレーム」を確定させる。
+      if (wc.width !== v.videoWidth || wc.height !== v.videoHeight) {
+        wc.width = v.videoWidth;
+        wc.height = v.videoHeight;
+      }
+      const wctx = wc.getContext("2d");
+      if (!wctx) return;
+      wctx.drawImage(v, 0, 0, wc.width, wc.height);
+
+      // 2. MediaPipe にも同じ workingCanvas を解析させる。
+      //    こうすれば「解析されたフレーム」と「保存されるフレーム」が
+      //    物理的に同じピクセルになり、iPhone の video 取得タイミングの
+      //    ずれの影響を受けない。
       const now = performance.now();
-      const res = lm.detectForVideo(v, now);
+      const res = lm.detectForVideo(wc, now);
       const bs = res?.faceBlendshapes?.[0]?.categories;
       // ---- 新スコア計算 ----
       // 口: 左右口角と下唇の中心から角度を計算し s_mouth = α - β * θ
@@ -381,43 +388,18 @@ export default function RecordPage() {
       // 「ベスト」と判定され、その頃には実際の表情が緩み始めている。
       // ノイズ対策はフィルタ（瞬き除外・口形状・大口開け除外）に任せる。
       if (candidateAllowed && S > bestScoreRef.current + 0.01) {
-        const vEl = videoRef.current;
-        if (
-          vEl &&
-          vEl.videoWidth > 0 &&
-          typeof createImageBitmap === "function"
-        ) {
-          // ピーク発生を即時に記録（後続の同タイミング判定が連鎖しないように）。
-          // ただし bitmap が遅れて到着した場合に上書きされうる。
-          const triggerScore = S;
-          bestScoreRef.current = triggerScore;
-          createImageBitmap(vEl)
-            .then((bitmap) => {
-              // 解決時に既により高い peak が確定していれば破棄。
-              if (triggerScore + 0.001 < bestScoreRef.current) {
-                bitmap.close();
-                return;
-              }
-              closeBestBitmap();
-              bestImageBitmapRef.current = bitmap;
-            })
-            .catch(() => {});
-        } else {
-          // フォールバック (createImageBitmap 非対応環境)
-          const bc = bestCanvasRef.current;
-          if (vEl && bc && vEl.videoWidth > 0) {
-            if (
-              bc.width !== vEl.videoWidth ||
-              bc.height !== vEl.videoHeight
-            ) {
-              bc.width = vEl.videoWidth;
-              bc.height = vEl.videoHeight;
-            }
-            const bctx = bc.getContext("2d");
-            if (bctx) {
-              bctx.drawImage(vEl, 0, 0, bc.width, bc.height);
-              bestScoreRef.current = S;
-            }
+        // workingCanvas (= wc) には MediaPipe が解析したのと同じピクセルが
+        // 入っている。それを bestCanvas に GPU でコピーして保持する。
+        const bc = bestCanvasRef.current;
+        if (bc) {
+          if (bc.width !== wc.width || bc.height !== wc.height) {
+            bc.width = wc.width;
+            bc.height = wc.height;
+          }
+          const bctx = bc.getContext("2d");
+          if (bctx) {
+            bctx.drawImage(wc, 0, 0, bc.width, bc.height);
+            bestScoreRef.current = S;
           }
         }
       }
@@ -503,7 +485,6 @@ export default function RecordPage() {
     setArmCount(ARM_SECONDS);
     bestScoreRef.current = -Infinity;
     // 前回のベストフレームをクリア
-    closeBestBitmap();
     if (bestCanvasRef.current) {
       const bctx = bestCanvasRef.current.getContext("2d");
       if (bctx) {
@@ -544,7 +525,6 @@ export default function RecordPage() {
   function cleanupAll() {
     stopSmileWatch();
     cancelArm();
-    closeBestBitmap();
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -573,27 +553,11 @@ export default function RecordPage() {
     setShutter(true);
 
     // ベストフレームのソース選択:
-    //   優先1: 監視中に createImageBitmap で確保した ImageBitmap → bestCanvas に描画
-    //   優先2: bestCanvas に直接 drawImage されたフレーム (フォールバック経路)
-    //   優先3: 現在の映像フレーム (ピーク未検出時のフォールバック)
+    //   優先1: 監視中にピーク検出された bestCanvas
+    //   優先2: 現在の映像フレーム (ピーク未検出時のフォールバック)
     let sourceCanvas: HTMLCanvasElement;
     const bc = bestCanvasRef.current;
-    const bitmap = bestImageBitmapRef.current;
-
-    if (bitmap && bc) {
-      if (bc.width !== bitmap.width || bc.height !== bitmap.height) {
-        bc.width = bitmap.width;
-        bc.height = bitmap.height;
-      }
-      const bctx = bc.getContext("2d");
-      if (!bctx) {
-        capturedRef.current = false;
-        startSmileWatch();
-        return;
-      }
-      bctx.drawImage(bitmap, 0, 0);
-      sourceCanvas = bc;
-    } else if (bestScoreRef.current > -Infinity && bc) {
+    if (bestScoreRef.current > -Infinity && bc) {
       sourceCanvas = bc;
     } else {
       const ctx = c.getContext("2d");
