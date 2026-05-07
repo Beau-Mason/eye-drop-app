@@ -60,15 +60,16 @@ export default function RecordPage() {
   const [armCount, setArmCount] = useState(ARM_SECONDS);
 
   const [isSaving, setIsSaving] = useState(false);
-  const [participantId, setParticipantId] = useState<string | undefined>(undefined);
+  const [participantId, setParticipantId] = useState<string | undefined>(
+    undefined,
+  );
   // ベストフレーム保持
   const bestBlobRef = useRef<Blob | null>(null);
   const bestScoreRef = useRef<number>(-Infinity);
   const snapshotBusyRef = useRef(false);
-  // 瞬き/選定用
+  // 瞬き検知用
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
-  const selEmaRef = useRef<number>(0);
   // 撮影後のメッセージ中間部分（バリエーション）
   const midPhrases: string[] = [
     "素敵な笑顔ですね！",
@@ -124,13 +125,13 @@ export default function RecordPage() {
     "複数の目薬は5分以上あけて点眼しましょう。間隔が短いと前の薬が洗い流されてしまいます。",
     "点眼後はしばらく目を閉じましょう。瞬きすると薬液が流れ、効果が出にくくなります。",
     "目の周りにこぼれた点眼はやさしく拭き取りましょう。かゆみや色素沈着を防げます。",
-    "自己判断で点眼回数を増減しないようにしましょう。緑内障の治療は継続が大切で、即効性は感じにくいものです。",
+    "自己判断で点眼回数を増減するのはやめましょう。緑内障の治療は継続が大切で、即効性は感じにくいものです。",
     "容器の先がまぶたやまつ毛に触れないようにしましょう。雑菌が入ると感染症の原因になります。",
     "開封後の使用期限は守るようにしましょう。",
-    "点眼は1回1滴で十分です。多くさしても溢れるだけで、まぶたの副作用につながることがあります。",
+    "点眼は1回1滴で十分です。2滴以上さしても溢れるだけで、まぶたの副作用につながることがあります。",
     "痛み・充血・見え方の変化に気づいたら、自己判断せず受診しましょう。",
     "毎日の習慣とセットにすると忘れにくくなります。「朝の洗顔後」「夜の歯磨き後」などがおすすめです。",
-    "目薬は毎日目にする涼しい場所に保管しましょう。冷蔵保存が必要なものは医師の指示に従ってください。",
+    "目薬は日の当たらない涼しい場所に保管しましょう。毎日目にするところにするとさし忘れづらくなります。冷蔵保存が必要なものは医師の指示に従ってください。",
   ];
   const TIP_PHRASE_INDEX_KEY = "tipPhraseIndex_v1";
   const chooseTip = () => {
@@ -233,14 +234,14 @@ export default function RecordPage() {
             startArm();
           } catch {
             setMsg(
-              "動画の再生に失敗しました。別のブラウザ／端末でお試しください。"
+              "動画の再生に失敗しました。別のブラウザ／端末でお試しください。",
             );
           }
         };
       } catch (e) {
         console.error(e);
         setMsg(
-          "カメラにアクセスできません。権限やHTTPS（またはlocalhost）をご確認ください。"
+          "カメラにアクセスできません。権限やHTTPS（またはlocalhost）をご確認ください。",
         );
         setBadgeText("");
       }
@@ -362,12 +363,12 @@ export default function RecordPage() {
       const candidateAllowed =
         notBlinkWindow && eyesOk && mouthShapeOk && mouthOpenOk;
 
-      // 選定用のEMAスコア（瞬間スパイク抑制）
-      const selScore = selEmaRef.current * 0.6 + S * 0.4;
-      selEmaRef.current = selScore;
-
-      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）
-      if (candidateAllowed && selScore > bestScoreRef.current + 0.01) {
+      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）。
+      // 表示用スコアは EMA で平滑化しているが、ベストフレーム選定には
+      // 生のスコア S を使う。EMA だとピークから 1〜2 フレーム遅れて
+      // 「ベスト」と判定され、その頃には実際の表情が緩み始めている。
+      // ノイズ対策はフィルタ（瞬き除外・口形状・大口開け除外）に任せる。
+      if (candidateAllowed && S > bestScoreRef.current + 0.01) {
         const vEl = videoRef.current;
         const c = canvasRef.current;
         if (vEl && c && !snapshotBusyRef.current && vEl.videoWidth > 0) {
@@ -381,12 +382,12 @@ export default function RecordPage() {
               (b) => {
                 if (b) {
                   bestBlobRef.current = b;
-                  bestScoreRef.current = selScore;
+                  bestScoreRef.current = S;
                 }
                 snapshotBusyRef.current = false;
               },
               "image/jpeg",
-              0.9
+              0.9,
             );
           } else {
             snapshotBusyRef.current = false;
@@ -547,7 +548,7 @@ export default function RecordPage() {
         c.toBlob(
           (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
           "image/jpeg",
-          0.9
+          0.9,
         );
       });
     }
