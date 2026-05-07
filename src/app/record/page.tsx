@@ -63,10 +63,11 @@ export default function RecordPage() {
   const [participantId, setParticipantId] = useState<string | undefined>(
     undefined,
   );
-  // ベストフレーム保持
-  const bestBlobRef = useRef<Blob | null>(null);
+  // ベストフレーム保持。
+  // JPEG エンコード(toBlob)は遅いので監視中には行わず、
+  // ピーク時には canvas に drawImage するだけ(GPU 高速)。
+  // 10 秒経過後、最後に残っている canvas を一度だけエンコードして保存する。
   const bestScoreRef = useRef<number>(-Infinity);
-  const snapshotBusyRef = useRef(false);
   // 瞬き検知用
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
@@ -371,26 +372,21 @@ export default function RecordPage() {
       if (candidateAllowed && S > bestScoreRef.current + 0.01) {
         const vEl = videoRef.current;
         const c = canvasRef.current;
-        if (vEl && c && !snapshotBusyRef.current && vEl.videoWidth > 0) {
-          snapshotBusyRef.current = true;
-          c.width = vEl.videoWidth;
-          c.height = vEl.videoHeight;
+        if (vEl && c && vEl.videoWidth > 0) {
+          // canvas のサイズ変更はバッファをクリアするので、
+          // 必要な時だけ実行する。
+          if (
+            c.width !== vEl.videoWidth ||
+            c.height !== vEl.videoHeight
+          ) {
+            c.width = vEl.videoWidth;
+            c.height = vEl.videoHeight;
+          }
           const ctx = c.getContext("2d");
           if (ctx) {
+            // 高速な GPU drawImage のみ。toBlob はキャプチャ時にまとめて実行。
             ctx.drawImage(vEl, 0, 0, c.width, c.height);
-            c.toBlob(
-              (b) => {
-                if (b) {
-                  bestBlobRef.current = b;
-                  bestScoreRef.current = S;
-                }
-                snapshotBusyRef.current = false;
-              },
-              "image/jpeg",
-              0.9,
-            );
-          } else {
-            snapshotBusyRef.current = false;
+            bestScoreRef.current = S;
           }
         }
       }
@@ -474,7 +470,6 @@ export default function RecordPage() {
     if (armTimerRef.current) return;
     setArmed(true);
     setArmCount(ARM_SECONDS);
-    bestBlobRef.current = null;
     bestScoreRef.current = -Infinity;
 
     armTimerRef.current = setInterval(() => {
@@ -532,26 +527,30 @@ export default function RecordPage() {
     // シャッター演出
     setShutter(true);
 
-    // ベストがなければ現在フレームを取得
-    let blob: Blob | null = bestBlobRef.current;
-    if (!blob) {
-      c.width = v.videoWidth;
-      c.height = v.videoHeight;
-      const ctx = c.getContext("2d");
-      if (!ctx) {
-        capturedRef.current = false;
-        startSmileWatch();
-        return;
+    // 監視中にピークがあれば canvas にはそのフレームが保持されている。
+    // ピークが一度も検出されていなければ現在フレームを取得する。
+    let blob: Blob | null = null;
+    const ctx = c.getContext("2d");
+    if (!ctx) {
+      capturedRef.current = false;
+      startSmileWatch();
+      return;
+    }
+    if (bestScoreRef.current === -Infinity) {
+      // フォールバック: 現在の映像フレームを描画
+      if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
+        c.width = v.videoWidth;
+        c.height = v.videoHeight;
       }
       ctx.drawImage(v, 0, 0, c.width, c.height);
-      blob = await new Promise((resolve, reject) => {
-        c.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
-          "image/jpeg",
-          0.9,
-        );
-      });
     }
+    blob = await new Promise<Blob>((resolve, reject) => {
+      c.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+        "image/jpeg",
+        0.9,
+      );
+    });
 
     // 表示
     if (!blob) {
