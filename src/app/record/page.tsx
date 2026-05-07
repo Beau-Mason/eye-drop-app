@@ -63,16 +63,14 @@ export default function RecordPage() {
   const [participantId, setParticipantId] = useState<string | undefined>(
     undefined,
   );
-  // ベストフレーム保持。
-  // 監視ループでは workingCanvas (canvasRef) に毎回 video フレームを取り、
-  // それを MediaPipe に渡して解析する。これにより「解析対象のフレーム」と
-  // 「保存するフレーム」が物理的に同じピクセルになる。
-  // ピーク時は workingCanvas → bestCanvas に GPU コピー。
+  // ベストフレーム保持
+  const bestBlobRef = useRef<Blob | null>(null);
   const bestScoreRef = useRef<number>(-Infinity);
-  const bestCanvasRef = useRef<HTMLCanvasElement>(null);
-  // 瞬き検知用
+  const snapshotBusyRef = useRef(false);
+  // 瞬き/選定用
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
+  const selEmaRef = useRef<number>(0);
   // 撮影後のメッセージ中間部分（バリエーション）
   const midPhrases: string[] = [
     "素敵な笑顔ですね！",
@@ -281,26 +279,10 @@ export default function RecordPage() {
     smileTimerRef.current = setInterval(() => {
       const v = videoRef.current;
       const lm = faceLmRef.current;
-      const wc = canvasRef.current;
-      if (!v || !lm || !wc || v.paused || v.readyState < 2) return;
+      if (!v || !lm || v.paused || v.readyState < 2) return;
 
-      // 1. 現在の video フレームを workingCanvas にスナップショット。
-      //    iPhone でも video → canvas の drawImage は同期的にその瞬間の
-      //    フレームを書き込めるので、ここで「今のフレーム」を確定させる。
-      if (wc.width !== v.videoWidth || wc.height !== v.videoHeight) {
-        wc.width = v.videoWidth;
-        wc.height = v.videoHeight;
-      }
-      const wctx = wc.getContext("2d");
-      if (!wctx) return;
-      wctx.drawImage(v, 0, 0, wc.width, wc.height);
-
-      // 2. MediaPipe にも同じ workingCanvas を解析させる。
-      //    こうすれば「解析されたフレーム」と「保存されるフレーム」が
-      //    物理的に同じピクセルになり、iPhone の video 取得タイミングの
-      //    ずれの影響を受けない。
       const now = performance.now();
-      const res = lm.detectForVideo(wc, now);
+      const res = lm.detectForVideo(v, now);
       const bs = res?.faceBlendshapes?.[0]?.categories;
       // ---- 新スコア計算 ----
       // 口: 左右口角と下唇の中心から角度を計算し s_mouth = α - β * θ
@@ -382,24 +364,34 @@ export default function RecordPage() {
       const candidateAllowed =
         notBlinkWindow && eyesOk && mouthShapeOk && mouthOpenOk;
 
-      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）。
-      // 表示用スコアは EMA で平滑化しているが、ベストフレーム選定には
-      // 生のスコア S を使う。EMA だとピークから 1〜2 フレーム遅れて
-      // 「ベスト」と判定され、その頃には実際の表情が緩み始めている。
-      // ノイズ対策はフィルタ（瞬き除外・口形状・大口開け除外）に任せる。
-      if (candidateAllowed && S > bestScoreRef.current + 0.01) {
-        // workingCanvas (= wc) には MediaPipe が解析したのと同じピクセルが
-        // 入っている。それを bestCanvas に GPU でコピーして保持する。
-        const bc = bestCanvasRef.current;
-        if (bc) {
-          if (bc.width !== wc.width || bc.height !== wc.height) {
-            bc.width = wc.width;
-            bc.height = wc.height;
-          }
-          const bctx = bc.getContext("2d");
-          if (bctx) {
-            bctx.drawImage(wc, 0, 0, bc.width, bc.height);
-            bestScoreRef.current = S;
+      // 選定用のEMAスコア（瞬間スパイク抑制）
+      const selScore = selEmaRef.current * 0.6 + S * 0.4;
+      selEmaRef.current = selScore;
+
+      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）
+      if (candidateAllowed && selScore > bestScoreRef.current + 0.01) {
+        const vEl = videoRef.current;
+        const c = canvasRef.current;
+        if (vEl && c && !snapshotBusyRef.current && vEl.videoWidth > 0) {
+          snapshotBusyRef.current = true;
+          c.width = vEl.videoWidth;
+          c.height = vEl.videoHeight;
+          const ctx = c.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(vEl, 0, 0, c.width, c.height);
+            c.toBlob(
+              (b) => {
+                if (b) {
+                  bestBlobRef.current = b;
+                  bestScoreRef.current = selScore;
+                }
+                snapshotBusyRef.current = false;
+              },
+              "image/jpeg",
+              0.9,
+            );
+          } else {
+            snapshotBusyRef.current = false;
           }
         }
       }
@@ -483,19 +475,8 @@ export default function RecordPage() {
     if (armTimerRef.current) return;
     setArmed(true);
     setArmCount(ARM_SECONDS);
+    bestBlobRef.current = null;
     bestScoreRef.current = -Infinity;
-    // 前回のベストフレームをクリア
-    if (bestCanvasRef.current) {
-      const bctx = bestCanvasRef.current.getContext("2d");
-      if (bctx) {
-        bctx.clearRect(
-          0,
-          0,
-          bestCanvasRef.current.width,
-          bestCanvasRef.current.height,
-        );
-      }
-    }
 
     armTimerRef.current = setInterval(() => {
       setArmCount((prev) => {
@@ -552,39 +533,25 @@ export default function RecordPage() {
     // シャッター演出
     setShutter(true);
 
-    // ベストフレームのソース選択:
-    //   優先1: 監視中にピーク検出された bestCanvas
-    //   優先2: 現在の映像フレーム (ピーク未検出時のフォールバック)
-    let sourceCanvas: HTMLCanvasElement;
-    const bc = bestCanvasRef.current;
-    if (bestScoreRef.current > -Infinity && bc) {
-      sourceCanvas = bc;
-    } else {
+    // ベストがなければ現在フレームを取得
+    let blob: Blob | null = bestBlobRef.current;
+    if (!blob) {
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
       const ctx = c.getContext("2d");
       if (!ctx) {
         capturedRef.current = false;
         startSmileWatch();
         return;
       }
-      if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
-        c.width = v.videoWidth;
-        c.height = v.videoHeight;
-      }
       ctx.drawImage(v, 0, 0, c.width, c.height);
-      sourceCanvas = c;
-    }
-    // iPhone Safari/Brave で c.toBlob が空 Blob を返すバグの対策として、
-    // toDataURL → fetch → blob() 経由で確実に有効な JPEG Blob を得る。
-    let blob: Blob | null = null;
-    try {
-      const dataUrl = sourceCanvas.toDataURL("image/jpeg", 0.9);
-      if (dataUrl && dataUrl.startsWith("data:image/")) {
-        const res = await fetch(dataUrl);
-        blob = await res.blob();
-        if (blob.size === 0) blob = null;
-      }
-    } catch {
-      blob = null;
+      blob = await new Promise<Blob>((resolve, reject) => {
+        c.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+          "image/jpeg",
+          0.9,
+        );
+      });
     }
 
     // 表示
@@ -845,7 +812,6 @@ export default function RecordPage() {
       </div>
 
       <canvas ref={canvasRef} className="hidden" />
-      <canvas ref={bestCanvasRef} className="hidden" />
 
       <style jsx>{`
         @keyframes pop {
