@@ -45,6 +45,7 @@ export default function RecordPage() {
   // UI状態
   const [msg, setMsg] = useState("カメラを起動しています…");
   const [badgeText, setBadgeText] = useState<string>("");
+  const [tip, setTip] = useState<string>("");
   const [snapUrl, setSnapUrl] = useState<string | null>(null);
   const [showImage, setShowImage] = useState(false); // ライブ→静止画の切替
   const [shutter, setShutter] = useState(false); // 白フラッシュ
@@ -114,6 +115,39 @@ export default function RecordPage() {
       return phrase;
     } catch {
       return midPhrases[0];
+    }
+  };
+
+  // 撮影ごとに順番に表示する点眼 tips。
+  const tipPhrases: string[] = [
+    "毎日きちんと続けると視野の進行を抑えられます。継続が一番の力になります。",
+    "複数の目薬は5分以上あけて点眼しましょう。間隔が短いと前の薬が洗い流されてしまいます。",
+    "点眼後はしばらく目を閉じましょう。瞬きすると薬液が流れ、効果が出にくくなります。",
+    "目の周りにこぼれた点眼はやさしく拭き取りましょう。かゆみや色素沈着を防げます。",
+    "自己判断で点眼回数を増減しないようにしましょう。緑内障の治療は継続が大切で、即効性は感じにくいものです。",
+    "容器の先がまぶたやまつ毛に触れないようにしましょう。雑菌が入ると感染症の原因になります。",
+    "開封後の使用期限は守るようにしましょう。",
+    "点眼は1回1滴で十分です。多くさしても溢れるだけで、まぶたの副作用につながることがあります。",
+    "痛み・充血・見え方の変化に気づいたら、自己判断せず受診しましょう。",
+    "毎日の習慣とセットにすると忘れにくくなります。「朝の洗顔後」「夜の歯磨き後」などがおすすめです。",
+    "目薬は毎日目にする涼しい場所に保管しましょう。冷蔵保存が必要なものは医師の指示に従ってください。",
+  ];
+  const TIP_PHRASE_INDEX_KEY = "tipPhraseIndex_v1";
+  const chooseTip = () => {
+    try {
+      const raw =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(TIP_PHRASE_INDEX_KEY)
+          : null;
+      let idx = raw ? parseInt(raw, 10) : 0;
+      if (!Number.isFinite(idx) || idx < 0 || idx >= tipPhrases.length) idx = 0;
+      const phrase = tipPhrases[idx] ?? tipPhrases[0];
+      const next = (idx + 1) % tipPhrases.length;
+      if (typeof window !== "undefined")
+        window.localStorage.setItem(TIP_PHRASE_INDEX_KEY, String(next));
+      return phrase;
+    } catch {
+      return tipPhrases[0];
     }
   };
   // 😊 パーティクル（視覚フィードバック）
@@ -543,6 +577,7 @@ export default function RecordPage() {
     const finalScore =
       bestScoreRef.current === -Infinity ? smileScore : bestScoreRef.current;
     const middle = chooseMiddle();
+    const tip = chooseTip();
 
     await db.snaps.put({
       id,
@@ -550,12 +585,15 @@ export default function RecordPage() {
       eye,
       blob: blob!,
       smileScore: finalScore,
-      note: middle, // 中間部分を保存
+      // 笑顔フィードバックと点眼 tip を改行区切りで保存。
+      // 管理画面ではそのまま表示され、研究者は participants に出した内容を再現できる。
+      note: `${middle}\n${tip}`,
       participantId,
     });
 
     setIsSaving(false);
     setMsg(`記録しました。${middle} 今日も点眼頑張ってて偉い！👏`);
+    setTip(tip);
     setTimeout(() => setShutter(false), 200);
 
     // メタデータ（顔写真は含まれない）をサーバーへ fire-and-forget 送信。
@@ -587,6 +625,7 @@ export default function RecordPage() {
     setSnapUrl(null);
     setMsg("点眼後の写真を撮ります。カメラに顔を写してください。");
     setBadgeText("");
+    setTip("");
     capturedRef.current = false;
 
     // 再開
@@ -719,6 +758,17 @@ export default function RecordPage() {
         </div>
       </div>
 
+      {/* 点眼 tip（撮影成功時のみ表示） */}
+      {tip && (
+        <div
+          className="w-full max-w-sm rounded-2xl border border-amber-200/80 bg-amber-50/90 dark:bg-amber-900/20 dark:border-amber-400/30 px-4 py-3 text-sm md:text-base text-amber-900 dark:text-amber-100 shadow"
+          aria-live="polite"
+        >
+          <span className="font-semibold mr-1">💡 ヒント:</span>
+          {tip}
+        </div>
+      )}
+
       {/* メッセージ（読み上げ対応） */}
       <p
         className="text-base md:text-lg text-gray-800 dark:text-gray-200"
@@ -746,16 +796,14 @@ export default function RecordPage() {
               撮り直す
             </button>
             <button
-              onClick={() => router.push("/")}
-              className="px-5 py-3 rounded-2xl bg-black text-white text-base md:text-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+              onClick={() =>
+                lastSnapIdRef.current &&
+                router.push(`/survey/${lastSnapIdRef.current}`)
+              }
+              disabled={isSaving || !lastSnapIdRef.current}
+              className="px-5 py-3 rounded-2xl btn-primary text-base md:text-lg disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
             >
-              はじめのページへ戻る
-            </button>
-            <button
-              onClick={() => router.push("/history")}
-              className="px-5 py-3 rounded-2xl border text-base md:text-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
-            >
-              記録を閲覧
+              アンケートに進む
             </button>
           </>
         )}

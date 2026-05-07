@@ -8,8 +8,9 @@
 //
 // - 画像は IndexedDB にのみ残る
 // - メタデータ（撮影日時・笑顔スコア・表示したフィードバック文）だけを /api/snaps に送る
+// - アンケート回答は /api/surveys に送る
 
-import { db, type Snap } from "@/lib/db";
+import { db, type Snap, type Survey } from "@/lib/db";
 import { ensureSettings } from "@/lib/settings";
 
 // サーバーに送ってよいフィールドだけを列挙した型。blob は意図的に含めない。
@@ -33,9 +34,6 @@ export function toSnapRecord(snap: Snap): SnapRecord {
 }
 
 // 未同期の Snap を取り出して一括送信する。
-// - 認証トークンがなければ何もしない（未登録参加者）
-// - ネットワーク失敗時は syncedAt を更新しないだけで、次回再試行される
-// - 成功したレコードには syncedAt を記録する
 export async function syncPendingSnaps(): Promise<{
   sent: number;
   failed: number;
@@ -44,7 +42,6 @@ export async function syncPendingSnaps(): Promise<{
   const token = settings.token;
   if (!token) return { sent: 0, failed: 0 };
 
-  // syncedAt を持たないレコードを対象にする
   const all = await db.snaps.toArray();
   const pending = all.filter((s) => !s.syncedAt);
   if (pending.length === 0) return { sent: 0, failed: 0 };
@@ -64,11 +61,73 @@ export async function syncPendingSnaps(): Promise<{
         body: JSON.stringify(record),
       });
       if (!res.ok) {
-        // 401/403 は再試行しても無駄なので、ここでは単に失敗カウントにする
         failed += 1;
         continue;
       }
       await db.snaps.update(snap.id, { syncedAt: new Date().toISOString() });
+      sent += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+
+  return { sent, failed };
+}
+
+// アンケート用の送信型。
+export type SurveyRecord = {
+  surveyId: string;
+  snapId: string;
+  takenAt: string;
+  answeredAt: string;
+  selfEfficacy: number;
+  comment?: string;
+};
+
+export function toSurveyRecord(s: Survey): SurveyRecord {
+  return {
+    surveyId: s.id,
+    snapId: s.snapId,
+    takenAt: s.takenAt,
+    answeredAt: s.answeredAt,
+    selfEfficacy: s.selfEfficacy,
+    comment: s.comment,
+  };
+}
+
+export async function syncPendingSurveys(): Promise<{
+  sent: number;
+  failed: number;
+}> {
+  const settings = await ensureSettings();
+  const token = settings.token;
+  if (!token) return { sent: 0, failed: 0 };
+
+  const all = await db.surveys.toArray();
+  const pending = all.filter((s) => !s.syncedAt);
+  if (pending.length === 0) return { sent: 0, failed: 0 };
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const survey of pending) {
+    const record = toSurveyRecord(survey);
+    try {
+      const res = await fetch("/api/surveys", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(record),
+      });
+      if (!res.ok) {
+        failed += 1;
+        continue;
+      }
+      await db.surveys.update(survey.id, {
+        syncedAt: new Date().toISOString(),
+      });
       sent += 1;
     } catch {
       failed += 1;

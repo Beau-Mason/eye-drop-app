@@ -68,6 +68,33 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS snaps_meta_participant_taken_idx
       ON snaps_meta (participant_id, taken_at)
   `;
+  await client`
+    CREATE TABLE IF NOT EXISTS surveys_meta (
+      snap_id text PRIMARY KEY,
+      participant_id text NOT NULL,
+      taken_at timestamptz NOT NULL,
+      answered_at timestamptz NOT NULL,
+      self_efficacy smallint NOT NULL,
+      comment text,
+      received_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+  // 旧スキーマからの移行（TWEETS 9 項目を廃止し comment を追加）。
+  // 既存テーブルがある場合に列を加除する。冪等。
+  await client`ALTER TABLE surveys_meta ADD COLUMN IF NOT EXISTS comment text`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_b1`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_b2`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_b3`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_c1`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_c2`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_c3`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_a1`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_a2`;
+  await client`ALTER TABLE surveys_meta DROP COLUMN IF EXISTS tweets_a3`;
+  await client`
+    CREATE INDEX IF NOT EXISTS surveys_meta_participant_taken_idx
+      ON surveys_meta (participant_id, taken_at)
+  `;
   migratedOnce = true;
 }
 
@@ -135,4 +162,85 @@ export async function listAllSnapMeta(): Promise<SnapMetaView[]> {
     ORDER BY participant_id ASC, taken_at ASC
   `;
   return rows.map(rowToView);
+}
+
+// ---- Survey (TWEETS + 自己効力感) ----
+
+type SurveyMetaRow = {
+  snap_id: string;
+  participant_id: string;
+  taken_at: Date;
+  answered_at: Date;
+  self_efficacy: number;
+  comment: string | null;
+  received_at: Date;
+};
+
+export type SurveyMetaInsert = {
+  snapId: string;
+  participantId: string;
+  takenAt: string;
+  answeredAt: string;
+  selfEfficacy: number;
+  comment?: string | null;
+};
+
+export type SurveyMetaView = {
+  snapId: string;
+  participantId: string;
+  takenAt: string;
+  answeredAt: string;
+  selfEfficacy: number;
+  comment: string | null;
+  receivedAt: string;
+};
+
+export async function upsertSurveyMeta(row: SurveyMetaInsert): Promise<void> {
+  await ensureSchema();
+  const client = getClient();
+  await client`
+    INSERT INTO surveys_meta (
+      snap_id, participant_id, taken_at, answered_at, self_efficacy, comment
+    ) VALUES (
+      ${row.snapId}, ${row.participantId}, ${row.takenAt}, ${row.answeredAt},
+      ${row.selfEfficacy}, ${row.comment ?? null}
+    )
+    ON CONFLICT (snap_id) DO UPDATE SET
+      answered_at = EXCLUDED.answered_at,
+      self_efficacy = EXCLUDED.self_efficacy,
+      comment = EXCLUDED.comment
+  `;
+}
+
+function surveyRowToView(r: SurveyMetaRow): SurveyMetaView {
+  return {
+    snapId: r.snap_id,
+    participantId: r.participant_id,
+    takenAt: r.taken_at.toISOString(),
+    answeredAt: r.answered_at.toISOString(),
+    selfEfficacy: r.self_efficacy,
+    comment: r.comment,
+    receivedAt: r.received_at.toISOString(),
+  };
+}
+
+export async function listAllSurveyMeta(): Promise<SurveyMetaView[]> {
+  await ensureSchema();
+  const client = getClient();
+  // SELECT * を避けて明示的な列名で取得する。
+  // ALTER TABLE 後にキャッシュされたクエリプランが壊れる
+  // ("cached plan must not change result type") のを防ぐため。
+  const rows = await client<SurveyMetaRow[]>`
+    SELECT
+      snap_id,
+      participant_id,
+      taken_at,
+      answered_at,
+      self_efficacy,
+      comment,
+      received_at
+    FROM surveys_meta
+    ORDER BY participant_id ASC, taken_at ASC
+  `;
+  return rows.map(surveyRowToView);
 }

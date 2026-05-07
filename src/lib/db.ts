@@ -11,6 +11,19 @@ export type Snap = {
   participantId?: string; // 参加者ID（登録済みなら）
 };
 
+// 撮影後アンケート: 自己効力感 (0-7) と自由記述 (任意)。
+// 主キーは対応する Snap の id と同じにすることで 1:1 を保証する。
+export type Survey = {
+  id: string; // snap と同じ uuid
+  snapId: string;
+  takenAt: string; // 対応する撮影時刻
+  answeredAt: string; // 回答時刻
+  participantId?: string;
+  selfEfficacy: number; // 0-7
+  comment?: string; // 任意の自由記述
+  syncedAt?: string;
+};
+
 // IndexedDBはブラウザ × ドメイン（オリジン）単位
 
 // 一行しか持たないテーブル
@@ -23,31 +36,26 @@ export type Settings = {
   token?: string; // 認証トークン（任意）
 };
 
-// Blob: Binary Large Object, immutable
-
-// テーブルの例：
-// | id | takenAt    | eye  | smileScore |
-// | -- | ---------- | ---- | ---------- |
-// | 1  | 2025-02-01 | left | 0.82       |
-// | 2  | 2025-02-02 | both | 0.91       |
-
 class AppDB extends Dexie {
   snaps!: Table<Snap, string>;
   settings!: Table<Settings, string>;
+  surveys!: Table<Survey, string>;
   constructor() {
-    super("eyedrop-db"); // IndexedDB上のDB名を設定
+    super("eyedrop-db");
 
-    // "!:"はdefinite assignment
-    // Dexieはこの時点でsnapsとsettingsを内部的に初期化するが，typescriptはそれを知らないので後に代入されることを宣言する
     this.version(1).stores({
       snaps: "id,takenAt",
     });
     this.version(2).stores({
       snaps: "id,takenAt,participantId",
-      settings: "id", // settingsテーブルの主キーはidで設定．
+      settings: "id",
+    });
+    this.version(3).stores({
+      snaps: "id,takenAt,participantId",
+      settings: "id",
+      surveys: "id,snapId,takenAt,participantId",
     });
   }
 }
 
-// シングルトンとしてエクスポート．一度importされるとその後はキャッシュされた同じインスタンスを返す．
 export const db = new AppDB();
