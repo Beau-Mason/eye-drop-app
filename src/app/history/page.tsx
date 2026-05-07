@@ -128,11 +128,11 @@ export default function HistoryPage() {
                 );
               })()}
             </div>
-            {/* フィードバックコメント（少し目立つ薄青カード） */}
+            {/* フィードバックコメント（笑顔への一言のみ。tip は履歴では表示しない） */}
             {snap.note && (
               <div className="px-2 pb-2">
                 <div className="rounded-xl px-3 py-2 text-sm shadow border border-sky-200/80 bg-sky-50 text-sky-900 dark:bg-sky-900/30 dark:text-sky-100 dark:border-sky-400/30">
-                  {snap.note}
+                  {snap.note.split("\n")[0]}
                 </div>
               </div>
             )}
