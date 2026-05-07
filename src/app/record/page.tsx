@@ -64,18 +64,13 @@ export default function RecordPage() {
     undefined,
   );
   // ベストフレーム保持。
-  // 監視中は別の「ベストフレーム専用キャンバス」(DOM外、メモリ内)に
-  // ピーク時の映像フレームを drawImage で書き込む。
-  // 表示用 canvas や iOS のメモリ圧の影響を受けず、確実にピークフレームを保持できる。
-  // 10 秒経過後、このキャンバスを一度だけエンコードして JPEG にする。
+  // 監視中は別の「ベストフレーム専用キャンバス」にピーク時の映像フレームを
+  // drawImage で書き込む。
+  // この canvas は DOM に hidden で配置する。in-memory canvas (DOM外) だと
+  // iOS Safari/Brave で GPU acceleration が効かず drawImage(video) が
+  // 正しく動かないケースがあるため。
   const bestScoreRef = useRef<number>(-Infinity);
-  const bestCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const getBestCanvas = (): HTMLCanvasElement => {
-    if (!bestCanvasRef.current) {
-      bestCanvasRef.current = document.createElement("canvas");
-    }
-    return bestCanvasRef.current;
-  };
+  const bestCanvasRef = useRef<HTMLCanvasElement>(null);
   // 瞬き検知用
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
@@ -379,10 +374,8 @@ export default function RecordPage() {
       // ノイズ対策はフィルタ（瞬き除外・口形状・大口開け除外）に任せる。
       if (candidateAllowed && S > bestScoreRef.current + 0.01) {
         const vEl = videoRef.current;
-        if (vEl && vEl.videoWidth > 0) {
-          // ベストフレーム専用キャンバス(DOM 外、メモリ内)に書き込む。
-          // 表示用 canvas とは隔離され、他の処理で上書き/クリアされない。
-          const bc = getBestCanvas();
+        const bc = bestCanvasRef.current;
+        if (vEl && bc && vEl.videoWidth > 0) {
           if (
             bc.width !== vEl.videoWidth ||
             bc.height !== vEl.videoHeight
@@ -838,6 +831,7 @@ export default function RecordPage() {
       </div>
 
       <canvas ref={canvasRef} className="hidden" />
+      <canvas ref={bestCanvasRef} className="hidden" />
 
       <style jsx>{`
         @keyframes pop {
