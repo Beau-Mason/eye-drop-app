@@ -64,10 +64,18 @@ export default function RecordPage() {
     undefined,
   );
   // ベストフレーム保持。
-  // JPEG エンコード(toBlob)は遅いので監視中には行わず、
-  // ピーク時には canvas に drawImage するだけ(GPU 高速)。
-  // 10 秒経過後、最後に残っている canvas を一度だけエンコードして保存する。
+  // 監視中は別の「ベストフレーム専用キャンバス」(DOM外、メモリ内)に
+  // ピーク時の映像フレームを drawImage で書き込む。
+  // 表示用 canvas や iOS のメモリ圧の影響を受けず、確実にピークフレームを保持できる。
+  // 10 秒経過後、このキャンバスを一度だけエンコードして JPEG にする。
   const bestScoreRef = useRef<number>(-Infinity);
+  const bestCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const getBestCanvas = (): HTMLCanvasElement => {
+    if (!bestCanvasRef.current) {
+      bestCanvasRef.current = document.createElement("canvas");
+    }
+    return bestCanvasRef.current;
+  };
   // 瞬き検知用
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
@@ -371,21 +379,21 @@ export default function RecordPage() {
       // ノイズ対策はフィルタ（瞬き除外・口形状・大口開け除外）に任せる。
       if (candidateAllowed && S > bestScoreRef.current + 0.01) {
         const vEl = videoRef.current;
-        const c = canvasRef.current;
-        if (vEl && c && vEl.videoWidth > 0) {
-          // canvas のサイズ変更はバッファをクリアするので、
-          // 必要な時だけ実行する。
+        if (vEl && vEl.videoWidth > 0) {
+          // ベストフレーム専用キャンバス(DOM 外、メモリ内)に書き込む。
+          // 表示用 canvas とは隔離され、他の処理で上書き/クリアされない。
+          const bc = getBestCanvas();
           if (
-            c.width !== vEl.videoWidth ||
-            c.height !== vEl.videoHeight
+            bc.width !== vEl.videoWidth ||
+            bc.height !== vEl.videoHeight
           ) {
-            c.width = vEl.videoWidth;
-            c.height = vEl.videoHeight;
+            bc.width = vEl.videoWidth;
+            bc.height = vEl.videoHeight;
           }
-          const ctx = c.getContext("2d");
-          if (ctx) {
-            // 高速な GPU drawImage のみ。toBlob はキャプチャ時にまとめて実行。
-            ctx.drawImage(vEl, 0, 0, c.width, c.height);
+          const bctx = bc.getContext("2d");
+          if (bctx) {
+            // 高速な GPU drawImage のみ。toBlob はキャプチャ時に1回だけ実行。
+            bctx.drawImage(vEl, 0, 0, bc.width, bc.height);
             bestScoreRef.current = S;
           }
         }
@@ -471,6 +479,18 @@ export default function RecordPage() {
     setArmed(true);
     setArmCount(ARM_SECONDS);
     bestScoreRef.current = -Infinity;
+    // 前回のベストフレームをクリア
+    if (bestCanvasRef.current) {
+      const bctx = bestCanvasRef.current.getContext("2d");
+      if (bctx) {
+        bctx.clearRect(
+          0,
+          0,
+          bestCanvasRef.current.width,
+          bestCanvasRef.current.height,
+        );
+      }
+    }
 
     armTimerRef.current = setInterval(() => {
       setArmCount((prev) => {
@@ -527,30 +547,38 @@ export default function RecordPage() {
     // シャッター演出
     setShutter(true);
 
-    // 監視中にピークがあれば canvas にはそのフレームが保持されている。
-    // ピークが一度も検出されていなければ現在フレームを取得する。
-    let blob: Blob | null = null;
-    const ctx = c.getContext("2d");
-    if (!ctx) {
-      capturedRef.current = false;
-      startSmileWatch();
-      return;
-    }
-    if (bestScoreRef.current === -Infinity) {
-      // フォールバック: 現在の映像フレームを描画
+    // 監視中にピークが検出されていればベストフレーム専用キャンバスに保持済み。
+    // ピーク未検出ならフォールバックとして現在フレームを表示用 canvas に描画する。
+    let sourceCanvas: HTMLCanvasElement;
+    if (bestScoreRef.current > -Infinity && bestCanvasRef.current) {
+      sourceCanvas = bestCanvasRef.current;
+    } else {
+      const ctx = c.getContext("2d");
+      if (!ctx) {
+        capturedRef.current = false;
+        startSmileWatch();
+        return;
+      }
       if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
         c.width = v.videoWidth;
         c.height = v.videoHeight;
       }
       ctx.drawImage(v, 0, 0, c.width, c.height);
+      sourceCanvas = c;
     }
-    blob = await new Promise<Blob>((resolve, reject) => {
-      c.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
-        "image/jpeg",
-        0.9,
-      );
-    });
+    // iPhone Safari/Brave で c.toBlob が空 Blob を返すバグの対策として、
+    // toDataURL → fetch → blob() 経由で確実に有効な JPEG Blob を得る。
+    let blob: Blob | null = null;
+    try {
+      const dataUrl = sourceCanvas.toDataURL("image/jpeg", 0.9);
+      if (dataUrl && dataUrl.startsWith("data:image/")) {
+        const res = await fetch(dataUrl);
+        blob = await res.blob();
+        if (blob.size === 0) blob = null;
+      }
+    } catch {
+      blob = null;
+    }
 
     // 表示
     if (!blob) {

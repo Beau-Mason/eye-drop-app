@@ -29,12 +29,23 @@ export default function HistoryPage() {
     (async () => {
       const snaps = await db.snaps.orderBy("takenAt").reverse().toArray();
       if (!mounted) return;
-      const withUrl = snaps.map((s) => {
-        const typed = ensureJpegBlob(s.blob);
-        const url = URL.createObjectURL(typed);
-        createdUrlsRef.current.push(url);
-        return { snap: s, url };
-      });
+      // iPhone Safari/Brave では blob: URL の表示が不安定なケースがあるため、
+      // 最初から dataURL に変換して使う。
+      const withUrl = await Promise.all(
+        snaps.map(async (s) => {
+          const typed = ensureJpegBlob(s.blob);
+          try {
+            const dataUrl = await blobToDataUrl(typed);
+            return { snap: s, url: dataUrl };
+          } catch {
+            // フォールバックとして blob: URL を試みる
+            const url = URL.createObjectURL(typed);
+            createdUrlsRef.current.push(url);
+            return { snap: s, url };
+          }
+        }),
+      );
+      if (!mounted) return;
       setItems(withUrl);
     })();
     return () => {
