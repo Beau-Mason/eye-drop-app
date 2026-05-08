@@ -54,6 +54,8 @@ export default function RecordPage() {
   // 笑顔関連
   const [smileScore, setSmileScore] = useState<number>(0);
   const [tier, setTier] = useState<0 | 1 | 2 | 3>(0);
+  // 動作確認用に画面に出すベストスコア。-Infinity の代わりに null。
+  const [bestDisplay, setBestDisplay] = useState<number | null>(null);
 
   // アーム（撮影直前の3秒カウント）
   const [armed, setArmed] = useState(false);
@@ -343,14 +345,13 @@ export default function RecordPage() {
       }
       prevMinOpenRef.current = minOpen;
 
-      // 候補フィルタ: 瞬き直後と完全に目が閉じてる時だけ除外する。
-      // スマホで歯を見せた自然な笑顔だと jawOpen / mouthOpenRatio が
-      // 厳しい閾値に引っかかってベストフレームが一度も更新されないため、
-      // 口の開きフィルタは外し、口形状の閾値も控えめにした。
+      // 候補フィルタは瞬き直後と完全閉眼時だけ除外する最小構成。
+      // スマホで MediaPipe の landmarks が一部欠落して s_mouth=0 のまま
+      // ベストフレームが一度も更新されない事象に対処するため、
+      // 口関連のフィルタは全て外し、最終的な S の大きさだけで判定する。
       const notBlinkWindow = nowTs >= blinkSuppressUntilRef.current;
       const eyesOk = minOpen >= 0.15;
-      const mouthShapeOk = s_mouth >= 0.1;
-      const candidateAllowed = notBlinkWindow && eyesOk && mouthShapeOk;
+      const candidateAllowed = notBlinkWindow && eyesOk && S >= 0.05;
 
       // 選定用のEMAスコア（瞬間スパイク抑制）
       const selScore = selEmaRef.current * 0.6 + S * 0.4;
@@ -384,6 +385,7 @@ export default function RecordPage() {
           if (ctx) {
             ctx.drawImage(vEl, 0, 0, targetW, targetH);
             bestScoreRef.current = selScore;
+            setBestDisplay(selScore);
           }
         }
       }
@@ -468,6 +470,7 @@ export default function RecordPage() {
     setArmed(true);
     setArmCount(ARM_SECONDS);
     bestScoreRef.current = -Infinity;
+    setBestDisplay(null);
     // 前回のベストフレームをクリア
     if (bestCanvasRef.current) {
       const ctx = bestCanvasRef.current.getContext("2d");
@@ -742,9 +745,12 @@ export default function RecordPage() {
 
           {/* 笑顔スコアのリアルタイム表示 */}
           {!showImage && (
-            <div className="pointer-events-none absolute top-0 right-0 p-3">
+            <div className="pointer-events-none absolute top-0 right-0 p-3 flex flex-col items-end gap-1">
               <div className="rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow">
                 笑顔スコア: {smileScore.toFixed(2)}
+              </div>
+              <div className="rounded-full px-3 py-1 text-xs md:text-sm font-semibold bg-emerald-100/90 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-100 backdrop-blur shadow">
+                ベスト: {bestDisplay === null ? "—" : bestDisplay.toFixed(2)}
               </div>
             </div>
           )}
