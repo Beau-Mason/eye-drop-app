@@ -63,10 +63,12 @@ export default function RecordPage() {
   const [participantId, setParticipantId] = useState<string | undefined>(
     undefined,
   );
-  // ベストフレーム保持
-  const bestBlobRef = useRef<Blob | null>(null);
+  // ベストフレーム保持。
+  // ピーク検出時には bestCanvas に drawImage するだけ（GPU で高速）。
+  // toBlob は撮影完了時に1回だけ実行する。
+  // こうすることで、スマホで toBlob が遅くて peak をスキップしてしまう問題を回避する。
+  const bestCanvasRef = useRef<HTMLCanvasElement>(null);
   const bestScoreRef = useRef<number>(-Infinity);
-  const snapshotBusyRef = useRef(false);
   // 瞬き/選定用
   const prevMinOpenRef = useRef<number>(1);
   const blinkSuppressUntilRef = useRef<number>(0);
@@ -368,16 +370,16 @@ export default function RecordPage() {
       const selScore = selEmaRef.current * 0.6 + S * 0.4;
       selEmaRef.current = selScore;
 
-      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）。
-      // スマホで toBlob が遅すぎて次の peak をスキップしてしまう問題への対策として、
-      // 短辺/長辺ともに 960px に収まるよう縮小してから toBlob する。
-      // 100ms 以上経過した後は busy フラグを強制解除する保険も入れる。
+      // ベスト更新時は bestCanvas に drawImage するだけ（GPU 高速）。
+      // toBlob は撮影完了時に1回だけ実行する。
+      // これにより「スマホで toBlob が遅すぎて次の peak をスキップしてしまう」
+      // 問題を回避できる。
       if (candidateAllowed && selScore > bestScoreRef.current + 0.01) {
         const vEl = videoRef.current;
-        const c = canvasRef.current;
-        if (vEl && c && !snapshotBusyRef.current && vEl.videoWidth > 0) {
-          snapshotBusyRef.current = true;
-          const SNAPSHOT_MAX_DIM = 960;
+        const bestCanvas = bestCanvasRef.current;
+        if (vEl && bestCanvas && vEl.videoWidth > 0) {
+          // スマホでも余裕で動くよう短辺/長辺ともに 720px に収める。
+          const SNAPSHOT_MAX_DIM = 720;
           const scale = Math.min(
             1,
             SNAPSHOT_MAX_DIM /
@@ -385,31 +387,17 @@ export default function RecordPage() {
           );
           const targetW = Math.round(vEl.videoWidth * scale);
           const targetH = Math.round(vEl.videoHeight * scale);
-          c.width = targetW;
-          c.height = targetH;
-          const ctx = c.getContext("2d");
+          if (
+            bestCanvas.width !== targetW ||
+            bestCanvas.height !== targetH
+          ) {
+            bestCanvas.width = targetW;
+            bestCanvas.height = targetH;
+          }
+          const ctx = bestCanvas.getContext("2d");
           if (ctx) {
             ctx.drawImage(vEl, 0, 0, targetW, targetH);
-            // 万が一 toBlob のコールバックが iPhone Brave で
-            // 発火しなかった場合に備え、念のためタイムアウトで
-            // busy フラグを解除する保険。
-            const safety = setTimeout(() => {
-              snapshotBusyRef.current = false;
-            }, 1500);
-            c.toBlob(
-              (b) => {
-                clearTimeout(safety);
-                if (b) {
-                  bestBlobRef.current = b;
-                  bestScoreRef.current = selScore;
-                }
-                snapshotBusyRef.current = false;
-              },
-              "image/jpeg",
-              0.85,
-            );
-          } else {
-            snapshotBusyRef.current = false;
+            bestScoreRef.current = selScore;
           }
         }
       }
@@ -493,8 +481,19 @@ export default function RecordPage() {
     if (armTimerRef.current) return;
     setArmed(true);
     setArmCount(ARM_SECONDS);
-    bestBlobRef.current = null;
     bestScoreRef.current = -Infinity;
+    // 前回のベストフレームをクリア
+    if (bestCanvasRef.current) {
+      const ctx = bestCanvasRef.current.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(
+          0,
+          0,
+          bestCanvasRef.current.width,
+          bestCanvasRef.current.height,
+        );
+      }
+    }
 
     armTimerRef.current = setInterval(() => {
       setArmCount((prev) => {
@@ -551,9 +550,26 @@ export default function RecordPage() {
     // シャッター演出
     setShutter(true);
 
-    // ベストがなければ現在フレームを取得
-    let blob: Blob | null = bestBlobRef.current;
+    // 監視中にピーク検出されていれば bestCanvas にそのフレームが保持されている。
+    // そこから 1 回だけ toBlob して JPEG にする。
+    // ピーク未検出なら現在の映像フレームをフォールバックで取得。
+    let blob: Blob | null = null;
+    const bestCanvas = bestCanvasRef.current;
+    if (bestCanvas && bestScoreRef.current !== -Infinity) {
+      try {
+        blob = await new Promise<Blob>((resolve, reject) => {
+          bestCanvas.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+            "image/jpeg",
+            0.85,
+          );
+        });
+      } catch {
+        blob = null;
+      }
+    }
     if (!blob) {
+      // フォールバック: 現在の映像フレーム
       c.width = v.videoWidth;
       c.height = v.videoHeight;
       const ctx = c.getContext("2d");
@@ -563,13 +579,17 @@ export default function RecordPage() {
         return;
       }
       ctx.drawImage(v, 0, 0, c.width, c.height);
-      blob = await new Promise<Blob>((resolve, reject) => {
-        c.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
-          "image/jpeg",
-          0.9,
-        );
-      });
+      try {
+        blob = await new Promise<Blob>((resolve, reject) => {
+          c.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+            "image/jpeg",
+            0.85,
+          );
+        });
+      } catch {
+        blob = null;
+      }
     }
 
     // 表示
@@ -830,6 +850,7 @@ export default function RecordPage() {
       </div>
 
       <canvas ref={canvasRef} className="hidden" />
+      <canvas ref={bestCanvasRef} className="hidden" />
 
       <style jsx>{`
         @keyframes pop {
