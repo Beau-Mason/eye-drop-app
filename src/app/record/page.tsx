@@ -343,28 +343,14 @@ export default function RecordPage() {
       }
       prevMinOpenRef.current = minOpen;
 
-      // 口の開き具合（比率）計算と jawOpen
-      let mouthOpenRatio = 0;
-      if (face) {
-        const PL = face[MOUTH_LEFT_IDX];
-        const PR = face[MOUTH_RIGHT_IDX];
-        const PB = face[MOUTH_BOTTOM_CENTER_IDX];
-        if (PL && PR && PB) {
-          const midX = (PL.x + PR.x) / 2;
-          const midY = (PL.y + PR.y) / 2;
-          const mouthWidth = Math.hypot(PR.x - PL.x, PR.y - PL.y);
-          const mouthHeight = Math.hypot(PB.x - midX, PB.y - midY);
-          if (mouthWidth > 1e-6) mouthOpenRatio = mouthHeight / mouthWidth;
-        }
-      }
-      const jawOpen = bs?.find((c) => c.categoryName === "jawOpen")?.score ?? 0;
-
+      // 候補フィルタ: 瞬き直後と完全に目が閉じてる時だけ除外する。
+      // スマホで歯を見せた自然な笑顔だと jawOpen / mouthOpenRatio が
+      // 厳しい閾値に引っかかってベストフレームが一度も更新されないため、
+      // 口の開きフィルタは外し、口形状の閾値も控えめにした。
       const notBlinkWindow = nowTs >= blinkSuppressUntilRef.current;
-      const eyesOk = minOpen >= 0.25;
-      const mouthShapeOk = s_mouth >= 0.3;
-      const mouthOpenOk = mouthOpenRatio <= 0.45 && jawOpen <= 0.6;
-      const candidateAllowed =
-        notBlinkWindow && eyesOk && mouthShapeOk && mouthOpenOk;
+      const eyesOk = minOpen >= 0.15;
+      const mouthShapeOk = s_mouth >= 0.1;
+      const candidateAllowed = notBlinkWindow && eyesOk && mouthShapeOk;
 
       // 選定用のEMAスコア（瞬間スパイク抑制）
       const selScore = selEmaRef.current * 0.6 + S * 0.4;
