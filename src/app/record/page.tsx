@@ -54,8 +54,6 @@ export default function RecordPage() {
   // 笑顔関連
   const [smileScore, setSmileScore] = useState<number>(0);
   const [tier, setTier] = useState<0 | 1 | 2 | 3>(0);
-  // 動作確認用に画面に出すベストスコア。-Infinity の代わりに null。
-  const [bestDisplay, setBestDisplay] = useState<number | null>(null);
 
   // アーム（撮影直前の3秒カウント）
   const [armed, setArmed] = useState(false);
@@ -385,7 +383,6 @@ export default function RecordPage() {
           if (ctx) {
             ctx.drawImage(vEl, 0, 0, targetW, targetH);
             bestScoreRef.current = selScore;
-            setBestDisplay(selScore);
           }
         }
       }
@@ -470,7 +467,6 @@ export default function RecordPage() {
     setArmed(true);
     setArmCount(ARM_SECONDS);
     bestScoreRef.current = -Infinity;
-    setBestDisplay(null);
     // 前回のベストフレームをクリア
     if (bestCanvasRef.current) {
       const ctx = bestCanvasRef.current.getContext("2d");
@@ -745,12 +741,9 @@ export default function RecordPage() {
 
           {/* 笑顔スコアのリアルタイム表示 */}
           {!showImage && (
-            <div className="pointer-events-none absolute top-0 right-0 p-3 flex flex-col items-end gap-1">
+            <div className="pointer-events-none absolute top-0 right-0 p-3">
               <div className="rounded-full px-3 py-1 text-sm md:text-base font-semibold bg-white/90 dark:bg-black/60 text-black dark:text-white backdrop-blur shadow">
                 笑顔スコア: {smileScore.toFixed(2)}
-              </div>
-              <div className="rounded-full px-3 py-1 text-xs md:text-sm font-semibold bg-emerald-100/90 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-100 backdrop-blur shadow">
-                ベスト: {bestDisplay === null ? "—" : bestDisplay.toFixed(2)}
               </div>
             </div>
           )}
