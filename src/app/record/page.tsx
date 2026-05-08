@@ -368,19 +368,37 @@ export default function RecordPage() {
       const selScore = selEmaRef.current * 0.6 + S * 0.4;
       selEmaRef.current = selScore;
 
-      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）
+      // ベスト更新時スナップショットを記録（フィルタ通過＋少し上回ったら）。
+      // スマホで toBlob が遅すぎて次の peak をスキップしてしまう問題への対策として、
+      // 短辺/長辺ともに 960px に収まるよう縮小してから toBlob する。
+      // 100ms 以上経過した後は busy フラグを強制解除する保険も入れる。
       if (candidateAllowed && selScore > bestScoreRef.current + 0.01) {
         const vEl = videoRef.current;
         const c = canvasRef.current;
         if (vEl && c && !snapshotBusyRef.current && vEl.videoWidth > 0) {
           snapshotBusyRef.current = true;
-          c.width = vEl.videoWidth;
-          c.height = vEl.videoHeight;
+          const SNAPSHOT_MAX_DIM = 960;
+          const scale = Math.min(
+            1,
+            SNAPSHOT_MAX_DIM /
+              Math.max(vEl.videoWidth, vEl.videoHeight),
+          );
+          const targetW = Math.round(vEl.videoWidth * scale);
+          const targetH = Math.round(vEl.videoHeight * scale);
+          c.width = targetW;
+          c.height = targetH;
           const ctx = c.getContext("2d");
           if (ctx) {
-            ctx.drawImage(vEl, 0, 0, c.width, c.height);
+            ctx.drawImage(vEl, 0, 0, targetW, targetH);
+            // 万が一 toBlob のコールバックが iPhone Brave で
+            // 発火しなかった場合に備え、念のためタイムアウトで
+            // busy フラグを解除する保険。
+            const safety = setTimeout(() => {
+              snapshotBusyRef.current = false;
+            }, 1500);
             c.toBlob(
               (b) => {
+                clearTimeout(safety);
                 if (b) {
                   bestBlobRef.current = b;
                   bestScoreRef.current = selScore;
@@ -388,7 +406,7 @@ export default function RecordPage() {
                 snapshotBusyRef.current = false;
               },
               "image/jpeg",
-              0.9,
+              0.85,
             );
           } else {
             snapshotBusyRef.current = false;
